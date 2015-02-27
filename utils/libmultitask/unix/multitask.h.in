@@ -1,0 +1,45 @@
+#ifndef __MULTITASK_H
+#define __MULTITASK_H
+
+#include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <sys/types.h>
+
+#define byte uint8_t
+#define uint unsigned int
+#define ulong unsigned long
+#define uvlong unsigned long long
+
+#define uint8 uint8_t
+#define uint16 uint16_t
+#define uint32 uint32_t
+#define uint64 uint64_t
+
+#ifndef noreturn
+#define noreturn _Noreturn
+#define __libmultitask_noreturn 1
+#endif
+
+#define AUTOLINK(x)
+
+%HEADER%
+
+#undef AUTOLINK
+
+#ifdef __libmultitask_noreturn
+#undef __libmultitask_noreturn
+#undef noreturn
+#endif
+
+#undef byte
+#undef uint
+#undef ulong
+#undef uvlong
+
+#undef uint8
+#undef uint16
+#undef uint32
+#undef uint64
+
+#endif

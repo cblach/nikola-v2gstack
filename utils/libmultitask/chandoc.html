@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html><head>
+<meta http-equiv="content-type" content="text/html; charset=UTF-8"><title>Go channels on steroids</title><style type="text/css">
+      body {
+        font-family: arial, sans, sans-serif;
+        margin: 0;
+      }
+
+      iframe {
+        border: 0;
+        frameborder: 0;
+        height: 100%;
+        width: 100%;
+      }
+
+      #header, #footer {
+        background: #f0f0f0;
+        padding: 10px 10px;
+      }
+
+      #header {
+        border-bottom: 1px #ccc solid;
+      }
+
+      #footer {
+        border-top: 1px #ccc solid;
+        border-bottom: 1px #ccc solid;
+        font-size: 13;
+      }
+
+      #contents {
+        margin: 6px;
+      }
+
+      .dash {
+        padding: 0 6px;
+      }
+    </style></head><body><div id="header">Go channels on steroids</div><div id="contents"><style type="text/css">ol{margin:0;padding:0}.c9{max-width:468pt;background-color:#ffffff;padding:72pt 72pt 72pt 72pt}.c4{font-size:9pt;background-color:#ffffff;font-family:"Courier New"}.c3{widows:2;orphans:2}.c10{color:inherit;text-decoration:inherit}.c7{color:#1155cc;text-decoration:underline}.c0{direction:ltr}.c1{text-align:right}.c2{height:11pt}.c8{text-align:center}.c5{page-break-after:avoid}.c6{text-indent:36pt}.title{widows:2;padding-top:0pt;line-height:1.15;orphans:2;text-align:left;color:#000000;font-size:21pt;font-family:"Trebuchet MS";padding-bottom:0pt;page-break-after:avoid}.subtitle{widows:2;padding-top:0pt;line-height:1.15;orphans:2;text-align:left;color:#666666;font-style:italic;font-size:13pt;font-family:"Trebuchet MS";padding-bottom:10pt;page-break-after:avoid}li{color:#000000;font-size:11pt;font-family:"Arial"}p{color:#000000;font-size:11pt;margin:0;font-family:"Arial"}h1{widows:2;padding-top:10pt;line-height:1.15;orphans:2;text-align:left;color:#000000;font-size:16pt;font-family:"Trebuchet MS";padding-bottom:0pt;page-break-after:avoid}h2{widows:2;padding-top:10pt;line-height:1.15;orphans:2;text-align:left;color:#000000;font-size:13pt;font-family:"Trebuchet MS";font-weight:bold;padding-bottom:0pt;page-break-after:avoid}h3{widows:2;padding-top:8pt;line-height:1.15;orphans:2;text-align:left;color:#666666;font-size:12pt;font-family:"Trebuchet MS";font-weight:bold;padding-bottom:0pt;page-break-after:avoid}h4{widows:2;padding-top:8pt;line-height:1.15;orphans:2;text-align:left;color:#666666;font-size:11pt;text-decoration:underline;font-family:"Trebuchet MS";padding-bottom:0pt;page-break-after:avoid}h5{widows:2;padding-top:8pt;line-height:1.15;orphans:2;text-align:left;color:#666666;font-size:11pt;font-family:"Trebuchet MS";padding-bottom:0pt;page-break-after:avoid}h6{widows:2;padding-top:8pt;line-height:1.15;orphans:2;text-align:left;color:#666666;font-style:italic;font-size:11pt;font-family:"Trebuchet MS";padding-bottom:0pt;page-break-after:avoid}</style><p class="c0 c5 c8 title"><a name="h.h23m1dwm0wep"></a><span>Go channels on steroids</span></p><p class="c0 c1"><span>Dmitry Vyukov</span></p><p class="c0 c1"><span>dvyukov@</span></p><p class="c0 c1"><span>Jan 28, 2014</span></p><p class="c0 c1 c2"><span></span></p><p class="c0 c2"><span></span></p><h1 class="c0 c5"><a name="h.dd3vtwtazwa5"></a><span>Why?</span></h1><p class="c0"><span>Channels are the main synchronization and communication primitive in Go, they need to be fast and scalable.</span></p><p class="c0 c2"><span></span></p><p class="c0"><span>Goals:</span></p><p class="c0"><span>- make single-threaded (non-contended) channel operations faster</span></p><p class="c0"><span>- make contended buffered (producer/consumer) channel operations faster</span></p><p class="c0"><span>- make non-blocking failing operations (e.g. checking of "stop" channel) faster</span></p><p class="c0"><span>- make chan semaphores (chan struct{}) faster</span></p><p class="c0"><span>- make select statements faster</span></p><p class="c0 c2"><span></span></p><p class="c0"><span>Non-goals:</span></p><p class="c0"><span>- make channels completely lock-free (this would significantly complicate implementation and make it slower for common cases)</span></p><p class="c0"><span>- make contended synchronous channel operations faster</span></p><p class="c0 c2"><span></span></p><p class="c0"><span>The rest of the document describes details of the design.</span></p><p class="c0 c2"><span></span></p><h1 class="c0 c5"><a name="h.oea1aftrn0i5"></a><span>How?</span></h1><h2 class="c3 c0 c5"><a name="h.me2mbugxoioq"></a><span>Types of channels</span></h2><p class="c3 c0"><span>There are 3 internal types of channels:</span></p><p class="c0 c3"><span>1.
+ Sync channels. They do not need any buffering and buffer management 
+code. Also they implement direct hand off semantics (a goroutine 
+directly chooses the pair and accomplishes communication with it).</span></p><p class="c3 c0"><span>2.
+ Async channels. This is traditional producer-consumer queues based on 
+ring buffer. They do not implement hand off semantics -- an unblocked 
+consumer competes on general rights with other consumers, if it loses 
+the competition it blocks again.</span></p><p class="c3 c0"><span>3. 
+Async channels with zero-sized elements (chan struct{}). This is 
+essentially semaphores. They do not need buffers (consume O(1) memory), 
+and do not implement hand off semantics.</span></p><p class="c0 c2"><span></span></p><h2 class="c0 c5"><a name="h.qrbvlyl8ike5"></a><span>Sync send/recv</span></h2><p class="c0"><span>Before diving into selects, let's first consider how standalone send/recv work.</span></p><p class="c0"><span>Sync
+ channels are mostly mutex-protected, except for non-blocking operation 
+failure fast-path (e.g. non-blocking recv from an empty chan). Sync chan
+ contains the following data:</span></p><p class="c0 c2"><span></span></p><p class="c0"><span>struct Hchan {</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Lock;</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;bool closed;</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;SudoG* sendq; &nbsp;// waiting senders</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;SudoG* recvq; &nbsp;// waiting receivers</span></p><p class="c0"><span>};</span></p><p class="c0 c2"><span></span></p><p class="c0"><span>Send locks the mutex, and checks whether it needs to block or satisfy an inverse operation:</span></p><p class="c0 c2"><span></span></p><p class="c0"><span>bool syncchansend(Hchan *c, T val, bool block) {</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if(c-&gt;closed) &nbsp;// fast-path</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;panic(“closed”);</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if(!block &amp;&amp; c-&gt;recvq == nil) &nbsp;// fast-path</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return false;</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;lock(c);</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if(c-&gt;closed) {</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;unlock(c);</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;panic(“closed”);</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if(sg = removewaiter(&amp;c-&gt;recvq)) {</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;//
+ Have a blocked receiver, communicate with it.</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;unlock(c);</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;sg-&gt;val = val;</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;sg-&gt;completed = true;</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;unblock(sg-&gt;g);</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return true;</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if(!block) {</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;unlock(c);</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return false;</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;// Block and wait for a pair.</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;sg-&gt;g = g;</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;sg-&gt;val = val;</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;addwaiter(&amp;c-&gt;sendq, sg);</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;unlock(c);</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;block();</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if(!sg-&gt;completed)</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;panic(“closed”);
+ &nbsp;// unblocked by close</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;// Unblocked by a recv.</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return true;</span></p><p class="c0"><span>}</span></p><p class="c0 c2"><span></span></p><h2 class="c0 c5"><a name="h.f8hbfrg828mt"></a><span>Async send/recv</span></h2><p class="c0"><span>Async
+ send/recv is lock-free if it does not need to manipulate wait queues, 
+wait queues are protected by the mutex. Non-blocking failing operations 
+are fast-pathed as well.</span></p><p class="c0"><span>Let’s first consider how non-blocking operations proceed.</span></p><p class="c0 c2"><span></span></p><p class="c0"><span>The async channel contains the following data:</span></p><p class="c0 c2"><span></span></p><p class="c0"><span>struct Hchan {</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;uint32 cap; &nbsp; // channel capacity</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Elem* &nbsp;buf; &nbsp; // ring buffer of size cap</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;// send and receive positions,</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;// low 32 bits represent position in the buffer,</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;// high 32 bits represent the current “lap” over the ring buffer</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;uint64 sendx;</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;uint64 recvx;</span></p><p class="c0"><span>};</span></p><p class="c0 c2"><span></span></p><p class="c0"><span>struct Elem {</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;// current lap,</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;// the element is ready for writing on laps 0, 2, 4, ...</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;// for reading -- on laps 1, 3, 5, ...</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;uint32 lap;</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;T &nbsp; &nbsp; &nbsp;val; &nbsp;// user data</span></p><p class="c0"><span>};</span></p><p class="c0 c2"><span></span></p><p class="c0"><span>Sends
+ synchronize with each other by means of advancing sendx with CAS, 
+whoever advances the position writes to the element. Sends synchronize 
+with recvs by means of lap variable in each element, basically, lap 
+value says whether this element is ready for reading/writing on the 
+current lap (high 32 bits of sendx/recvx).</span></p><p class="c0"><span>Below is the send algorithm:</span></p><p class="c0 c2"><span></span></p><p class="c0"><span>bool asyncchansend_nonblock(Hchan* c, T val) {</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;uint32 pos, lap, elap;</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;uint64 x, newx;</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Elem *e;</span></p><p class="c0 c2"><span></span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;for(;;) {</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;x
+ = atomicload64(&amp;c-&gt;sendx);</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pos = (uint32)x;</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;lap = (uint32)(x &gt;&gt; 32);</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;e = &amp;c-&gt;buf[pos];</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;elap
+ = atomicload32(&amp;e-&gt;lap);</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if(lap == elap) {</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;//
+ The element is ready for writing on this lap.</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;//
+ Try to claim the right to write to this element.</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if(pos
+ + 1 &lt; c-&gt;cap)</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;newx
+ = x + 1; &nbsp;// just increase the pos</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;else</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;newx
+ = (uint64)(lap + 2) &lt;&lt; 32;</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if(!cas64(&amp;c-&gt;sendx,
+ x, newx))</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;continue;
+ &nbsp;// lose the race, retry</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;//
+ We own the element, do non-atomic write.</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;e-&gt;val
+ = val;</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;//
+ Make the element available for reading.</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;atomicstore32(&amp;e-&gt;lap,
+ elap + 1);</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return
+ true;</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}
+ else if((int32)(lap - elap) &gt; 0) {</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;//
+ The element is not yet read on the previous lap,</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;//
+ the chan is full.</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return
+ false;</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;} else {</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;//
+ The element has already been written on this lap,</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;//
+ this means that c-&gt;sendx has been changed as well,</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;//
+ retry.</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}</span></p><p class="c0"><span>}</span></p><p class="c0 c2"><span></span></p><p class="c0"><span>Recv operation is completely symmetrical, except that recvs start at lap 1 and read the element instead of writing.</span></p><p class="c0 c2"><span></span></p><p class="c0"><span>Now,
+ let's consider how blocking operations are implemented. The channel 
+structure is extended with a mutex and send/recv waiter queues:</span></p><p class="c0 c2"><span></span></p><p class="c0"><span>struct Hchan {</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;…</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Lock;</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;SudoG* sendq;</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;SudoG* recvq;</span></p><p class="c0"><span>};</span></p><p class="c0 c2"><span></span></p><p class="c0"><span>To
+ do a blocking send, a goroutine tries to do the non-blocking send. If 
+it succeeds, it checks whether there are recv waiters, and if so 
+unblocks one of them.</span></p><p class="c0"><span>If the non-blocking 
+send fails (the chan is full), it locks the mutex, adds itself to the 
+send waiter queue and after that re-checks if the chan is still full. If
+ the chan is full, the goroutine blocks. If the chan is not full, the 
+goroutine removes itself from waiter queue, unlocks the mutex and 
+retries.</span></p><p class="c0"><span>Blocking receive proceeds absolutely the same, except for s/send/recv/ s/recv/send/.</span></p><p class="c0"><span>The
+ main tricky aspect of such blocking algorithms is to ensure that no 
+deadlocks are possible (a sender is blocked indefinitely on a non-full 
+channel; or a receiver is blocked indefinitely on a non-empty channel). 
+By doing this check-store-recheck thing, we ensure than either (1) 
+sender sees that there is a recv waiter and unblocks it, or (2) receiver
+ sees the element in the buffer and consumes it, or (3) both 1 and 2 (in
+ this case the competition is resolved by means of the mutex); but NOT 
+(4) sender does not see recv waiters and receiver does not see the 
+element in the buffer and blocks indefinitely.</span></p><p class="c0 c2"><span></span></p><p class="c0"><span>Below is the blocking send algorithm:</span></p><p class="c0 c2"><span></span></p><p class="c0"><span>void asyncchansend(Hchan* c, T val) {</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;for(;;) {</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if(asyncchansend_nonblock(c,
+ val)) {</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;//
+ Send succeeded, see if we need to unblock a receiver.</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if(c-&gt;recvq
+ != nil) {</span></p><p class="c0 c6"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;lock(c);</span></p><p class="c0 c6"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;sg
+ = removewaiter(&amp;c-&gt;recvq);</span></p><p class="c0 c6"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;unlock(c);</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if(sg
+ != nil)</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;unblock(sg-&gt;g);</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return;</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;} else {</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;//
+ The channel is full.</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;lock(c);</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;sg-&gt;g
+ = g;</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;addwaiter(&amp;c-&gt;sendq,
+ sg);</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if(notfull(c))
+ {</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;removewaiter(&amp;c-&gt;sendq,
+ sg);</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;unlock(c);</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;continue;</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;unlock(c);</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;block();</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;//
+ Retry send.</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}</span></p><p class="c0"><span>}</span></p><p class="c0 c2"><span></span></p><h2 class="c0 c5"><a name="h.f5clr8g76p45"></a><span>struct{} send/recv</span></h2><p class="c0"><span>Zero-sized async channels generally resemble non-zero-sized async channels:</span></p><p class="c0"><span>- operations are lock-free in non-blocking case</span></p><p class="c0"><span>- wait queues are still protected by the mutex</span></p><p class="c0"><span>- non-blocking failing operations are fast-pathed</span></p><p class="c0 c2"><span></span></p><p class="c0"><span>The differences are:</span></p><p class="c0"><span>-
+ Hchan contains a single counter instead of send/recv positions and the 
+ring buffer; the counter represents number of elements in the channel</span></p><p class="c0"><span>- non-blocking send/receive do a CAS loop to adjust the counter</span></p><p class="c0"><span>- full/empty predicates merely check the counter value</span></p><p class="c0 c2"><span></span></p><p class="c0"><span>The rest, including the blocking algorithm, is the same.</span></p><p class="c0 c2"><span></span></p><h2 class="c0 c5"><a name="h.xfwac02zh5n8"></a><span>close</span></h2><p class="c0"><span>Close
+ operations locks the mutex, sets closed flag and then unblocks all 
+waiters. Async send/recv operations check the closed flag before 
+blocking.</span></p><p class="c0"><span>This allows to achieve the same 
+guarantees that present for async send/recv blocking. Namely, either (1)
+ close sees a waiter, or (2) a waiter sees closed flag set or (3) both 1
+ and 2 (in this case the competition is again resolved by means of the 
+mutex).</span></p><p class="c0 c2"><span></span></p><h2 class="c0 c5"><a name="h.7w4kx5hfuwp0"></a><span>select</span></h2><p class="c0"><span>Now we are ready for The Select.</span></p><p class="c0"><span>Select
+ operation does not lock mutexes of all involved channels at once, 
+instead it proceeds by doing fine-grained operations on individual 
+channels.</span></p><p class="c0"><span>Select consists of 4 phases:</span></p><p class="c0"><span>0.
+ Shuffle all involved channels to provide the pseudo-random guarantee 
+(all subsequent phases work with this shuffled list of channels).</span></p><p class="c0"><span>1.
+ Check all channels one-by-one to see if any of them is ready for 
+communication, if so do the communication and exit. This makes selects 
+that do not block faster and more scalable, as they do not need to sort 
+and lock mutexes. Moreover, such select does not even need to touch all 
+channels if the first one is ready.</span></p><p class="c0"><span>2. Prepare for blocking on all channels.</span></p><p class="c0"><span>3. Block. Goto 1.</span></p><p class="c0 c2"><span></span></p><p class="c0"><span>Phase 2 needs a more detailed description.</span></p><p class="c0"><span>Essentially
+ it proceeds the same way as blocking in async send/recv. That is, lock 
+channel mutex, add itself to send/recv waiter queue and after that 
+re-check if the chan is still not ready for communication. If the 
+channel is not ready, then proceed to the next channel. Otherwise, 
+remove itself from all waiter queues and goto phase 1.</span></p><p class="c0 c2"><span></span></p><p class="c0"><span>There
+ is another tricky aspect. We add select as waiter to several channels, 
+but we do not want several sync channel operations to complete 
+communication with the select (for sync channels unblocking completes 
+successful communication). In order to prevent this, select-related 
+entries in waiter queues contain a pointer to a select-global state 
+word. Before unblocking such waiters other goroutines try to CAS(statep,
+ nil, sg), which gives them the right to unblock/communicate with the 
+waiter. If the CAS fails, goroutines ignore the waiter (it’s being 
+signaled by somebody else).</span></p><p class="c0 c2"><span></span></p><p class="c0"><span>This
+ algorithm requires to implement isready(c) predicate for all channel 
+types, which does not represent a significant problem. High-level 
+algorithm of a select operation follows:</span></p><p class="c0 c2"><span></span></p><p class="c0"><span>Scase *select(Select *sel) {</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;randomize channel order;</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;for(;;) {</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;// Phase 1.</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;foreach(Scase *cas in sel) {</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if(chansend/recv_nonblock(cas-&gt;c,
+ ...))</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return
+ cas;</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;// Phase 2.</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;selectstate = nil;</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;foreach(Scase *cas in sel) {</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;lock(cas-&gt;c);</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;cas-&gt;sg-&gt;g
+ = g;</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;cas-&gt;sg-&gt;selectstatep
+ = &amp;selectstate;</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;addwaiter(&amp;cas-&gt;c-&gt;sendq/recvq,
+ cas-&gt;sg);</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if(isready(cas-&gt;c))
+ {</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;unlock(c);</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;goto
+ ready;</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;unlock(cas-&gt;c);</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;// Phase 3.</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;block();</span></p><p class="c0"><span>ready:</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;CAS(&amp;selectstate, nil, 1);</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;foreach(Scase *cas in sel) {</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;lock(cas-&gt;c);</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;removewaiter(&amp;cas-&gt;c-&gt;sendq/recvq,
+ cas-&gt;sg);</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;unlock(cas-&gt;c);</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;//
+ If we were unblocked by a sync chan operation,</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;//
+ the communication has completed.</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;if(selectstate &gt; 1)</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return
+ selectstate; &nbsp;// denotes the completed case</span></p><p class="c0"><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}</span></p><p class="c0"><span>}</span></p><p class="c0 c2"><span></span></p><p class="c0 c2"><span></span></p><h2 class="c3 c0 c5"><a name="h.nzb09t4c1jr1"></a><span>Prerequisites</span></h2><p class="c0"><span>There
+ are two prerequisites (op top of revision 18999). Since chan-related 
+data structures and algorithms will change significantly, we need to:</span></p><p class="c0"><span>1.
+ Remove special handling of chans from GC (GC_CHAN_PTR program). It's 
+possible to adopt GC_CHAN_PTR for new representations, but it looks 
+better to just give chan objects proper types.</span></p><p class="c0"><span>2.
+ Similarly, move chanlen/chancap into runtime instead of guessing in the
+ compiler which word means what (there is no single len word in async 
+chans).</span></p><p class="c0 c2"><span></span></p><p class="c0 c2"><span></span></p><h2 class="c0 c5"><a name="h.lsc72164wbxj"></a><span>Performance evaluation</span></h2><p class="c0"><span>Below is an annotated evaluation of the prototype (</span><span class="c7"><a class="c10" href="https://codereview.appspot.com/12544043/">https://codereview.appspot.com/12544043/</a></span><span>) on standard synthetic channel benchmarks.</span></p><p class="c0 c2"><span></span></p><p class="c0"><span class="c4">benchmark
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 
+&nbsp; &nbsp; &nbsp;old ns/op &nbsp; &nbsp;new ns/op &nbsp; &nbsp;delta</span></p><p class="c0"><span class="c4">BenchmarkChanNonblocking
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;24 &nbsp;
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;8 &nbsp;-66.53%</span></p><p class="c0"><span class="c4">BenchmarkChanNonblocking-2
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;92 &nbsp; &nbsp;
+ &nbsp; &nbsp; &nbsp; &nbsp;4 &nbsp;-95.57%</span></p><p class="c0"><span class="c4">BenchmarkChanNonblocking-4
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 104 &nbsp; &nbsp; 
+&nbsp; &nbsp; &nbsp; &nbsp;2 &nbsp;-97.95%</span></p><p class="c0"><span class="c4">BenchmarkChanNonblocking-8
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 114 &nbsp; &nbsp; 
+&nbsp; &nbsp; &nbsp; &nbsp;1 &nbsp;-99.02%</span></p><p class="c0"><span class="c4">BenchmarkChanNonblocking-16
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 92 &nbsp; &nbsp; 
+&nbsp; &nbsp; &nbsp; &nbsp;0 &nbsp;-99.37%</span></p><p class="c0"><span class="c4">BenchmarkChanNonblocking-32
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 82 &nbsp; &nbsp; 
+&nbsp; &nbsp; &nbsp; &nbsp;0 &nbsp;-99.46%</span></p><p class="c0"><span class="c4">// This takes advantage of the non-blocking fast path.</span></p><p class="c0 c2"><span class="c4"></span></p><p class="c0"><span class="c4">BenchmarkSelectUncontended
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 222 &nbsp; &nbsp; 
+&nbsp; &nbsp; &nbsp;159 &nbsp;-28.38%</span></p><p class="c0"><span class="c4">BenchmarkSelectUncontended-2 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 128 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 97 &nbsp;-23.98%</span></p><p class="c0"><span class="c4">BenchmarkSelectUncontended-4
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;87 &nbsp; &nbsp; &nbsp;
+ &nbsp; &nbsp; 52 &nbsp;-39.79%</span></p><p class="c0"><span class="c4">BenchmarkSelectUncontended-8
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;46 &nbsp; &nbsp; &nbsp;
+ &nbsp; &nbsp; 29 &nbsp;-37.69%</span></p><p class="c0"><span class="c4">BenchmarkSelectUncontended-16 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 23 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 15 &nbsp;-34.75%</span></p><p class="c0"><span class="c4">BenchmarkSelectUncontended-32 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 18 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 11 &nbsp;-36.26%</span></p><p class="c0"><span class="c4">// Single-threaded speedup, because we don’t sort/lock all mutexes and don’t zero select descriptor.</span></p><p class="c0 c2"><span class="c4"></span></p><p class="c0"><span class="c4">BenchmarkSelectContended
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 221 &nbsp; 
+&nbsp; &nbsp; &nbsp; &nbsp;152 &nbsp;-31.22%</span></p><p class="c0"><span class="c4">BenchmarkSelectContended-2
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 459 &nbsp; &nbsp; 
+&nbsp; &nbsp; &nbsp;159 &nbsp;-65.36%</span></p><p class="c0"><span class="c4">BenchmarkSelectContended-4
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 678 &nbsp; &nbsp; 
+&nbsp; &nbsp; &nbsp;254 &nbsp;-62.54%</span></p><p class="c0"><span class="c4">BenchmarkSelectContended-8
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 985 &nbsp; &nbsp; 
+&nbsp; &nbsp; &nbsp;365 &nbsp;-62.94%</span></p><p class="c0"><span class="c4">BenchmarkSelectContended-16
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;749 &nbsp; &nbsp; 
+&nbsp; &nbsp; &nbsp;337 &nbsp;-55.01%</span></p><p class="c0"><span class="c4">BenchmarkSelectContended-32
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;731 &nbsp; &nbsp; 
+&nbsp; &nbsp; &nbsp;421 &nbsp;-42.41%</span></p><p class="c0"><span class="c4">// Scalability improvements caused by finer-grained locking and lock-free paths.</span></p><p class="c0 c2"><span class="c4"></span></p><p class="c0"><span class="c4">BenchmarkSelectNonblock
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;104 
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 34 &nbsp;-66.92%</span></p><p class="c0"><span class="c4">BenchmarkSelectNonblock-2
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 51 &nbsp; 
+&nbsp; &nbsp; &nbsp; &nbsp; 17 &nbsp;-66.60%</span></p><p class="c0"><span class="c4">BenchmarkSelectNonblock-4
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 25 &nbsp; 
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;8 &nbsp;-64.56%</span></p><p class="c0"><span class="c4">BenchmarkSelectNonblock-8
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 12 &nbsp; 
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;4 &nbsp;-63.44%</span></p><p class="c0"><span class="c4">BenchmarkSelectNonblock-16
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 6 &nbsp; &nbsp;
+ &nbsp; &nbsp; &nbsp; &nbsp;2 &nbsp;-63.22%</span></p><p class="c0"><span class="c4">BenchmarkSelectNonblock-32
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 5 &nbsp; &nbsp;
+ &nbsp; &nbsp; &nbsp; &nbsp;2 &nbsp;-56.15%</span></p><p class="c0"><span class="c4">// Again, non-blocking fast paths.</span></p><p class="c0 c2"><span class="c4"></span></p><p class="c0"><span class="c4">BenchmarkChanUncontended
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;61 &nbsp;
+ &nbsp; &nbsp; &nbsp; &nbsp; 37 &nbsp;-38.30%</span></p><p class="c0"><span class="c4">BenchmarkChanUncontended-2
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;30 &nbsp; &nbsp;
+ &nbsp; &nbsp; &nbsp; 18 &nbsp;-39.07%</span></p><p class="c0"><span class="c4">BenchmarkChanUncontended-4
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;15 &nbsp; &nbsp;
+ &nbsp; &nbsp; &nbsp; &nbsp;9 &nbsp;-38.58%</span></p><p class="c0"><span class="c4">BenchmarkChanUncontended-8
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 8 &nbsp; &nbsp;
+ &nbsp; &nbsp; &nbsp; &nbsp;5 &nbsp;-37.20%</span></p><p class="c0"><span class="c4">BenchmarkChanUncontended-16
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;4 &nbsp; &nbsp; 
+&nbsp; &nbsp; &nbsp; &nbsp;2 &nbsp;-36.43%</span></p><p class="c0"><span class="c4">BenchmarkChanUncontended-32
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;3 &nbsp; &nbsp; 
+&nbsp; &nbsp; &nbsp; &nbsp;2 &nbsp;-32.46%</span></p><p class="c0"><span class="c4">// Single-threaded speedup, because instead of lock/unlock we do a single CAS.</span></p><p class="c0 c2"><span class="c4"></span></p><p class="c0"><span class="c4">BenchmarkChanContended
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;60
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 39 &nbsp;-34.05%</span></p><p class="c0"><span class="c4">BenchmarkChanContended-2
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 268 &nbsp; 
+&nbsp; &nbsp; &nbsp; &nbsp;291 &nbsp; +8.58%</span></p><p class="c0"><span class="c4">BenchmarkChanContended-4
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 301 &nbsp; 
+&nbsp; &nbsp; &nbsp; &nbsp;289 &nbsp; -3.99%</span></p><p class="c0"><span class="c4">BenchmarkChanContended-8
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 331 &nbsp; 
+&nbsp; &nbsp; &nbsp; &nbsp;332 &nbsp; +0.30%</span></p><p class="c0"><span class="c4">BenchmarkChanContended-16
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;254 &nbsp; 
+&nbsp; &nbsp; &nbsp; &nbsp;591 &nbsp;+132.68%</span></p><p class="c0"><span class="c4">BenchmarkChanContended-32
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;242 &nbsp; 
+&nbsp; &nbsp; &nbsp; &nbsp;726 &nbsp;+200.00%</span></p><p class="c0"><span class="c4">// Extremely contended async chans are slower because of increased contention in lock-free paths.</span></p><p class="c0 c2"><span class="c4"></span></p><p class="c0"><span class="c4">BenchmarkChanSync
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 
+&nbsp; &nbsp;127 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;127 &nbsp; +0.00%</span></p><p class="c0"><span class="c4">BenchmarkChanSync-2
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 
+&nbsp;395 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;393 &nbsp; -0.51%</span></p><p class="c0"><span class="c4">BenchmarkChanSync-4
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 
+&nbsp;358 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;340 &nbsp; -5.03%</span></p><p class="c0"><span class="c4">BenchmarkChanSync-8
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 
+&nbsp;293 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;312 &nbsp; +6.48%</span></p><p class="c0"><span class="c4">BenchmarkChanSync-16
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 
+353 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;361 &nbsp; +2.27%</span></p><p class="c0"><span class="c4">BenchmarkChanSync-32
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 
+216 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;220 &nbsp; +1.85%</span></p><p class="c0"><span class="c4">// Mostly flakes due to extreme contention.</span></p><p class="c0 c2"><span class="c4"></span></p><p class="c0"><span class="c4">BenchmarkChanProdCons0
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 134 
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;140 &nbsp; +4.48%</span></p><p class="c0"><span class="c4">BenchmarkChanProdCons0-2
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 407 &nbsp; 
+&nbsp; &nbsp; &nbsp; &nbsp;573 &nbsp;+40.79%</span></p><p class="c0"><span class="c4">BenchmarkChanProdCons0-4
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 667 &nbsp; 
+&nbsp; &nbsp; &nbsp; &nbsp;745 &nbsp;+11.69%</span></p><p class="c0"><span class="c4">BenchmarkChanProdCons0-8
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 934 &nbsp; 
+&nbsp; &nbsp; &nbsp; &nbsp;883 &nbsp; -5.46%</span></p><p class="c0"><span class="c4">BenchmarkChanProdCons0-16
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;760 &nbsp; 
+&nbsp; &nbsp; &nbsp; &nbsp;762 &nbsp; +0.26%</span></p><p class="c0"><span class="c4">BenchmarkChanProdCons0-32
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;700 &nbsp; 
+&nbsp; &nbsp; &nbsp; &nbsp;759 &nbsp; +8.43%</span></p><p class="c0"><span class="c4">// Highly contended sync channels are slower (due to fast paths), but are not interesting.</span></p><p class="c0 c2"><span class="c4"></span></p><p class="c0"><span class="c4">BenchmarkChanProdCons10
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 88 
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 71 &nbsp;-18.86%</span></p><p class="c0"><span class="c4">BenchmarkChanProdCons10-2
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;223 &nbsp; 
+&nbsp; &nbsp; &nbsp; &nbsp;104 &nbsp;-53.36%</span></p><p class="c0"><span class="c4">BenchmarkChanProdCons10-4
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;699 &nbsp; 
+&nbsp; &nbsp; &nbsp; &nbsp;197 &nbsp;-71.82%</span></p><p class="c0"><span class="c4">BenchmarkChanProdCons10-8
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;821 &nbsp; 
+&nbsp; &nbsp; &nbsp; &nbsp;512 &nbsp;-37.64%</span></p><p class="c0"><span class="c4">BenchmarkChanProdCons10-16
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 616 &nbsp; &nbsp; 
+&nbsp; &nbsp; &nbsp;588 &nbsp; -4.55%</span></p><p class="c0"><span class="c4">BenchmarkChanProdCons10-32
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 553 &nbsp; &nbsp; 
+&nbsp; &nbsp; &nbsp;575 &nbsp; +3.98%</span></p><p class="c0"><span class="c4">//
+ Highly contended async chans are faster with few threads (because they 
+are lock-free), but slower with more threads (because they are 
+lock-free); both results are not very interesting.</span></p><p class="c0 c2"><span class="c4"></span></p><p class="c0"><span class="c4">BenchmarkChanProdCons100
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;68 &nbsp;
+ &nbsp; &nbsp; &nbsp; &nbsp; 43 &nbsp;-37.12%</span></p><p class="c0"><span class="c4">BenchmarkChanProdCons100-2
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 206 &nbsp; &nbsp; 
+&nbsp; &nbsp; &nbsp; 95 &nbsp;-53.83%</span></p><p class="c0"><span class="c4">BenchmarkChanProdCons100-4
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 397 &nbsp; &nbsp; 
+&nbsp; &nbsp; &nbsp;338 &nbsp;-14.86%</span></p><p class="c0"><span class="c4">BenchmarkChanProdCons100-8
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 400 &nbsp; &nbsp; 
+&nbsp; &nbsp; &nbsp;469 &nbsp;+17.25%</span></p><p class="c0"><span class="c4">BenchmarkChanProdCons100-16
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;310 &nbsp; &nbsp; 
+&nbsp; &nbsp; &nbsp;773 &nbsp;+149.35%</span></p><p class="c0"><span class="c4">BenchmarkChanProdCons100-32
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;291 &nbsp; &nbsp; 
+&nbsp; &nbsp; &nbsp;753 &nbsp;+158.76%</span></p><p class="c0"><span class="c4">// Same as BenchmarkChanProdCons10.</span></p><p class="c0 c2"><span class="c4"></span></p><p class="c0"><span class="c4">BenchmarkChanProdConsWork0
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 730 &nbsp; &nbsp; 
+&nbsp; &nbsp; &nbsp;691 &nbsp; -5.34%</span></p><p class="c0"><span class="c4">BenchmarkChanProdConsWork0-2 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 427 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;487 &nbsp;+14.05%</span></p><p class="c0"><span class="c4">BenchmarkChanProdConsWork0-4 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 767 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;855 &nbsp;+11.47%</span></p><p class="c0"><span class="c4">BenchmarkChanProdConsWork0-8 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;1096 &nbsp; &nbsp; &nbsp; &nbsp; 1062 &nbsp; -3.10%</span></p><p class="c0"><span class="c4">BenchmarkChanProdConsWork0-16 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;906 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;965 &nbsp; +6.51%</span></p><p class="c0"><span class="c4">BenchmarkChanProdConsWork0-32 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;858 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;916 &nbsp; +6.76%</span></p><p class="c0"><span class="c4">// Sync channels are a bit slower under moderate load (goroutines do some local work), because of the fast paths. Use buffering!</span></p><p class="c0 c2"><span class="c4"></span></p><p class="c0"><span class="c4">BenchmarkChanProdConsWork10
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;648 &nbsp; &nbsp; 
+&nbsp; &nbsp; &nbsp;594 &nbsp; -8.33%</span></p><p class="c0"><span class="c4">BenchmarkChanProdConsWork10-2 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;593 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;519 &nbsp;-12.48%</span></p><p class="c0"><span class="c4">BenchmarkChanProdConsWork10-4 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 1089 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;344 &nbsp;-68.41%</span></p><p class="c0"><span class="c4">BenchmarkChanProdConsWork10-8 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 1334 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;500 &nbsp;-62.52%</span></p><p class="c0"><span class="c4">BenchmarkChanProdConsWork10-16 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;1107 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;572 &nbsp;-48.33%</span></p><p class="c0"><span class="c4">BenchmarkChanProdConsWork10-32 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;1005 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;575 &nbsp;-42.79%</span></p><p class="c0"><span class="c4">//
+ This is a much more interesting producer/consumer case - buffered 
+channel and goroutines do some local work -- new channels are 
+significantly faster because there are no mutexes.</span></p><p class="c0 c2"><span class="c4"></span></p><p class="c0"><span class="c4">BenchmarkChanProdConsWork100 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 620 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;607 &nbsp; -2.10%</span></p><p class="c0"><span class="c4">BenchmarkChanProdConsWork100-2 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 543 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;365 &nbsp;-32.78%</span></p><p class="c0"><span class="c4">BenchmarkChanProdConsWork100-4 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 823 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;211 &nbsp;-74.36%</span></p><p class="c0"><span class="c4">BenchmarkChanProdConsWork100-8 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;1030 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;563 &nbsp;-45.34%</span></p><p class="c0"><span class="c4">BenchmarkChanProdConsWork100-16 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;855 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;755 &nbsp;-11.70%</span></p><p class="c0"><span class="c4">BenchmarkChanProdConsWork100-32 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;788 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;760 &nbsp; -3.55%</span></p><p class="c0"><span class="c4">// Same as BenchmarkChanProdConsWork10.</span></p><p class="c0 c2"><span class="c4"></span></p><p class="c0"><span class="c4">BenchmarkSelectProdCons
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 1180 &nbsp; 
+&nbsp; &nbsp; &nbsp; 1031 &nbsp;-12.63%</span></p><p class="c0"><span class="c4">BenchmarkSelectProdCons-2
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;880 &nbsp; 
+&nbsp; &nbsp; &nbsp; &nbsp;683 &nbsp;-22.39%</span></p><p class="c0"><span class="c4">BenchmarkSelectProdCons-4
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 1213 &nbsp; &nbsp; 
+&nbsp; &nbsp; &nbsp;433 &nbsp;-64.30%</span></p><p class="c0"><span class="c4">BenchmarkSelectProdCons-8
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 1613 &nbsp; &nbsp; 
+&nbsp; &nbsp; &nbsp;578 &nbsp;-64.17%</span></p><p class="c0"><span class="c4">BenchmarkSelectProdCons-16
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;1298 &nbsp; &nbsp; 
+&nbsp; &nbsp; &nbsp;805 &nbsp;-37.98%</span></p><p class="c0"><span class="c4">BenchmarkSelectProdCons-32
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;1289 &nbsp; &nbsp; 
+&nbsp; &nbsp; &nbsp;773 &nbsp;-40.03%</span></p><p class="c0"><span class="c4">// Takes advantage of finer-grained locking and lock-free paths.</span></p><p class="c0 c2"><span class="c4"></span></p><p class="c0"><span class="c4">BenchmarkChanCreation
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 
+&nbsp;150 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;108 &nbsp;-28.00%</span></p><p class="c0"><span class="c4">BenchmarkChanCreation-2
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;104 
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 65 &nbsp;-37.31%</span></p><p class="c0"><span class="c4">BenchmarkChanCreation-4
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 56 
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 56 &nbsp; -0.70%</span></p><p class="c0"><span class="c4">BenchmarkChanCreation-8
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 57 
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 47 &nbsp;-18.06%</span></p><p class="c0"><span class="c4">BenchmarkChanCreation-16
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;63 &nbsp;
+ &nbsp; &nbsp; &nbsp; &nbsp; 48 &nbsp;-23.17%</span></p><p class="c0"><span class="c4">BenchmarkChanCreation-32
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;77 &nbsp;
+ &nbsp; &nbsp; &nbsp; &nbsp; 51 &nbsp;-34.53%</span></p><p class="c0"><span class="c4">// This is faster because the benchmark also includes send/recv operations, chan creation must not be significantly affected.</span></p><p class="c0 c2"><span class="c4"></span></p><p class="c0"><span class="c4">BenchmarkChanSem
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 
+&nbsp; &nbsp; &nbsp;55 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 28 
+&nbsp;-48.01%</span></p><p class="c0"><span class="c4">BenchmarkChanSem-2
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 
+&nbsp; 260 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 76 &nbsp;-70.69%</span></p><p class="c0"><span class="c4">BenchmarkChanSem-4
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 
+&nbsp; 303 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 95 &nbsp;-68.38%</span></p><p class="c0"><span class="c4">BenchmarkChanSem-8
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 
+&nbsp; 309 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;116 &nbsp;-62.46%</span></p><p class="c0"><span class="c4">BenchmarkChanSem-16
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 
+&nbsp;215 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;134 &nbsp;-37.67%</span></p><p class="c0"><span class="c4">BenchmarkChanSem-32
+ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 
+&nbsp;196 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;153 &nbsp;-21.94%</span></p><p class="c0"><span class="c4">// Takes advantage of special lock-free paths for chan struct{}.</span></p><p class="c0 c2"><span class="c4"></span></p><p class="c0 c2"><span></span></p><p class="c0 c2"><span></span></p></div></body></html>

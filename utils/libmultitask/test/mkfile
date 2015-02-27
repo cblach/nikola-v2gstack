@@ -1,0 +1,15 @@
+p9=`{readlink -f ~/.p9}
+<$p9/$objtype/mkfile
+
+LIB=../$O.libmultitask.a
+
+TARG=\
+	chan\
+	task\
+
+HFILES=\
+	../multitask.h\
+
+<$p9/mktest
+
+CFLAGS=$CFLAGS -I..
