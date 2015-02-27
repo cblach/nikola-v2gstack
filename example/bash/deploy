@@ -1,0 +1,11 @@
+#!/bin/bash
+dstdir=/home/debian/Code/
+
+echo Synchronizing;
+rsync -qr --delete -e\
+"ssh -i ~/.ssh/cb_nikola" ../../ debian@192.168.7.2:$dstdir \
+--exclude-from rsync-exclude.txt && \
+echo Building && \
+ssh -i ~/.ssh/cb_nikola -S ~/.ssh/controlmasters/debian@192.168.7.2:22 \
+debian@192.168.7.2 \
+"cd ${dstdir} && make && cd example && make"

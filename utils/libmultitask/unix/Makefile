@@ -3,9 +3,11 @@ AS=clang -integrated-as -mllvm --x86-asm-syntax=intel
 CFLAGS=-Os
 AFLAGS=
 PREFIX=/usr/local
+LIBDIR=$(PREFIX)/lib
 ARCH=$(shell sh ./arch.sh $(CC) $(CFLAGS))
 
 LIB=libmultitask.a
+HEADER=multitask.h
 
 SOURCES=\
 	../chan.c\
@@ -28,7 +30,7 @@ HEADERS=\
 	../multitask-impl.h\
 	u.h\
 	libc.h\
-	multitask.h\
+	$(HEADER)\
 
 all: $(LIB)
 
@@ -40,15 +42,15 @@ $(SOURCES): $(HEADERS)
 .c.o:
 	$(CC) $(CFLAGS) -I. -c -o $@ $<
 
-multitask.h: multitask.h.in
-	sed -e '/%HEADER%/{r ../multitask.h' -e 'd}' $< > $@
+$(HEADER): $(HEADER).in
+	sed -e "/%HEADER%/{r ../$(HEADER)" -e "d}" $< > $@
 
 $(LIB): $(OBJECTS)
-	ar r $@ $(OBJECTS)
+	ar rusc $@ $(OBJECTS)
 
 install: $(LIB)
-	cp -f multitask.h "$(DESTDIR)/$(PREFIX)/include/"
-	cp -f $(LIB) "$(DESTDIR)/$(PREFIX)/lib/"
+	install -D -m 644 $(HEADER) "$(DESTDIR)/$(PREFIX)/include/$(HEADER)"
+	install -D -m 644 $(LIB) "$(DESTDIR)/$(LIBDIR)/$(LIB)"
 
 clean:
-	rm -f $(OBJECTS) $(LIB) multitask.h
+	rm -f $(OBJECTS) $(LIB) $(HEADER)

@@ -1,6 +1,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "multitask.h"
 #include "map.h"
 #include <inttypes.h>
