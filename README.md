@@ -5,19 +5,18 @@ Please note that it requires uses TLS/PolarSSL, OpenV2GStack and libmultitask. T
 Getting started:
 - Download mbed TLS from https://tls.mbed.org/download or their git repository
 - mbed TLS must be configured to use thread locks. This is done by uncommenting #define POLARSSL_THREADING_C and POLARSSL_THREADING_PTHREAD in include/polarssl/config.h.
-- *make install* the mbed TLS libary
+- *make && make check && make install* the mbed TLS libary
 - *make* the OpenV2G library in utils/OpenV2g_x.x.x
 - *make* the libmultitask library in utils/libmultitask
 - *make* the nikola v2g stack
 - *make* the example folder
-
 Things to note:
 - I have made a custom makefile for OpenV2G. It can be located in utils/OpenV2G/Makefile
 - The SLAC client implementation is programmed to work with the Qualcomm QCA7000 chip.
 - The SLAC server is programmed to work with the Insys Powerline GP with SLAC device.
 - The application layer messaging in the example folder only covers a reference AC implementation.
 
-Bugs are still likely to be present. Please do not hesitate to create issues.
+Bugs are still likely to be present. Please do not hesitate to create issues. Also you may have to download a stdatomic.h from LLVM if it's not in your current installation.
 
 
 Working test bench setup:

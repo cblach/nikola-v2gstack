@@ -1,3 +1,0 @@
-#!/bin/bash
-ssh -i ~/.ssh/cb_nikola \
--M -S ~/.ssh/controlmasters/debian@192.168.7.2:22 debian@192.168.7.2
