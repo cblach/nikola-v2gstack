@@ -6,7 +6,10 @@ Getting started:
 - Download mbed TLS from https://tls.mbed.org/download or their git repository
 - mbed TLS must be configured to use thread locks. This is done by uncommenting #define POLARSSL_THREADING_C and POLARSSL_THREADING_PTHREAD in include/polarssl/config.h.
 - *make install* the mbed TLS libary
+- *make* the OpenV2G library in utils/OpenV2g_x.x.x
+- *make* the libmultitask library in utils/libmultitask
 - *make* the nikola v2g stack
+- *make* the example folder
 
 Things to note:
 - I have made a custom makefile for OpenV2G. It can be located in utils/OpenV2G/Makefile
