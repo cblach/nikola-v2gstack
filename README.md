@@ -10,6 +10,7 @@ Getting started:
 - *make* the libmultitask library in utils/libmultitask
 - *make* the nikola v2g stack
 - *make* the example folder
+
 Things to note:
 - I have made a custom makefile for OpenV2G. It can be located in utils/OpenV2G/Makefile
 - The SLAC client implementation is programmed to work with the Qualcomm QCA7000 chip.
