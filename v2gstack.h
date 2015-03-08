@@ -57,6 +57,16 @@ typedef struct{
     uint8_t evcc_id[6]; // EV mac address
     struct v2gSelectedServiceType services[v2gSelectedServiceListType_SelectedService_ARRAY_SIZE];
     v2gEnergyTransferModeType energy_transfer_mode;
+    v2gpaymentOptionType payment_type;
+    byte challenge[16];
+    struct{
+        bool valid_crt; // Before a contract can be valid, it must have a valid crt
+        bool valid;
+        byte cert[v2gCertificateChainType_Certificate_BYTES_SIZE];
+        size_t cert_len;
+        x509_crt crt;
+        ecdsa_context pubkey;
+    } contract;
     // === DO NOT MANIPULATE THE FOLLOWING FIELDS ===
     uint64_t id;
     QLock mutex;
@@ -64,6 +74,7 @@ typedef struct{
     enum session_status status;
 }session_t;
 
+int gen_random_data(void* dest, size_t dest_len);
 int init_sessions();
 session_t* session_new();
 session_t* session_lookup( uint64_t sessionid );

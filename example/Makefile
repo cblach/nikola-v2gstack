@@ -33,6 +33,7 @@ INCLUDES=\
     -I../utils/OpenV2G_0.9.3/src/codec\
     -I../utils/OpenV2G_0.9.3/src/appHandshake\
     -I../utils/OpenV2G_0.9.3/src/transport\
+    -I../utils/OpenV2G_0.9.3/src/xmldsig\
 
 .c.o:
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $<

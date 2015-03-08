@@ -23,26 +23,60 @@ static int cmp(Key k1, Key k2)
     return -1;
 }
 
-static int gen_random_data( void* dest, size_t dest_len ){
+int gen_random_data( void* dest, size_t dest_len ){
     int fd = open( "/dev/urandom", O_RDONLY );
     int len = 0;
+    if (fd == -1){
+        perror("gen_random_data: open /dev/urandom");
+        return -1;
+    }
     while ( len < dest_len ){
         ssize_t result = read( fd, (char*)dest + len, dest_len - len);
         if ( result < 0 ){
             perror("gen_random_data: read");
+            close(fd);
             return -1;
         }
         len += result;
     }
+    close(fd);
     return 0;
 }
 
+/*
+// Up to 1024 bytes dest
+int gen_random_data_base(unsigned char base, void* dest, size_t dest_len)
+{
+    size_t i;
+    size_t entropy_len;
+    byte rnd[1024];
+    if (dest_len > 1024) {
+        printf("gen_random_data_base: dest_len is %zu, maximum is 1024\n", dest_len)
+        return -1;
+    }
+    entropy_len = dest_len * base /
+    if (gen_random_data(rnd, dest_len) != 0) {
+        return -1;
+    }
+    for (i = 0; i < dest_len; i++) {
+        dest[i] = rnd[i] % base;
+    }
+    return 0;
+}*/
+
+
 void session_lock(session_t* session)
 {
+    if (session == NULL) {
+        return;
+    }
     qlock(&session->mutex);
 }
 void session_unlock(session_t* session)
 {
+    if (session == NULL) {
+        return;
+    }
     qunlock(&session->mutex);
 }
 
@@ -63,6 +97,9 @@ int init_sessions()//
 
 session_t* session_lookup( uint64_t sessionid )
 {
+    if (sessionid == 0) {
+        return NULL;
+    }
     union Key k = { .u64 = sessionid };
     qlock( &session_map_mutex );
     session_t** sessionpp =  (session_t**)mapfind( &session_map, k );
@@ -84,6 +121,7 @@ session_t* session_lookup( uint64_t sessionid )
 session_t* session_new()
 {
     union Key k;
+    // Must be hex binary
     int err = gen_random_data( &k.u64, 8);
     if( err != 0 ) {
         return NULL;
@@ -120,17 +158,13 @@ void session_terminate( session_t* session )
     union Key k = { .u64 = session->id };
     qlock( &session_map_mutex );
     mapremove( &session_map, k );
-    session_lock(session);
     session->status = SESSION_TERMINATED;
-    session_unlock(session);
     qunlock( &session_map_mutex );
 }
 
 void session_pause(session_t* session, bool pause)
 {
-    session_lock(session);
     session->status = SESSION_PAUSED;
-    session_unlock(session);
 }
 
 void session_remove_ref(session_t* session)

@@ -14,7 +14,7 @@ void plgp_slac_listen(char* if_name, byte dest_mac_evse[6]);
 typedef enum { EVSE_NODE, EV_NODE } node_type_t;
 
 int Node_Type = EVSE_NODE;
-bool Slac_Enable = true;
+bool Slac_Enable = false;
 char V2G_Network_Interface[IFNAMSIZ] = "eth0";
 
 void parseFlags( int argc, char **argv ){
@@ -56,7 +56,7 @@ threadmain( int argc,
     //testEth();
     if( Node_Type == EV_NODE ) {
         if (Slac_Enable) {
-            switch_power_line(V2G_Network_Interface, EVMAC, false);
+            switch_power_line(V2G_Network_Interface, EVMAC, true);
             printf("=== STARTING SLAC ASSOCIATION ===\n");
             while(slac_associate(V2G_Network_Interface) != 0){
                 printf("something went wrong, trying again\n");
@@ -67,7 +67,7 @@ threadmain( int argc,
         ev_example(V2G_Network_Interface);
         //struct ev_request_t req;
     } else if( Node_Type == EVSE_NODE ) {
-        switch_power_line(V2G_Network_Interface, EVSEMAC, false);
+        switch_power_line(V2G_Network_Interface, EVSEMAC, true);
         if (Slac_Enable) {
             printf("SLAC enabled\n");
             plgp_slac_listen(V2G_Network_Interface, EVSEMAC);

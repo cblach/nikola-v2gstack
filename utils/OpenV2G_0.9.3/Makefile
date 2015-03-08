@@ -28,6 +28,10 @@ SOURCES=\
     src/din/dinEXIDatatypesEncoder.c\
     src/din/dinEXIDatatypes.c\
     src/din/dinEXIDatatypesDecoder.c\
+    src/xmldsig/xmldsigEXIDatatypes.c\
+    src/xmldsig/xmldsigEXIDatatypesEncoder.c\
+    src/xmldsig/xmldsigEXIDatatypesDecoder.c\
+
 
 OBJECTS=\
     $(SOURCES:.c=.o)\
@@ -38,6 +42,7 @@ INCLUDES=\
     -Isrc/codec\
     -Isrc/transport\
     -Isrc/appHandshake\
+    -Isrc/xmldsig\
     -Isrc/din\
 
 .c.o:
