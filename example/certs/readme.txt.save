@@ -1,2 +1,0 @@
-Create self-signed SSL certficiate:
-openssl req -new -newkey rsa:4096 -nodes -out haha.csr -keyout haha.key -subj "/C=DK/ST=/L=Roskilde/O=DTU Risø/CN=haha"
