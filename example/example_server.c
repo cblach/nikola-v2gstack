@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <math.h>
 #include "polarssl/error.h"
 
 const v2gEnergyTransferModeType ENERGY_TRANSFER_MODES[] =
@@ -31,8 +32,142 @@ void init_v2g_response(struct v2gEXIDocument* exiIn, session_t* session)
     init_v2gBodyType(&exiIn->V2G_Message.Body);
 }
 
+double phyval_to_seconds(struct v2gPhysicalValueType v){
+    switch (v.Unit) {
+    case v2gunitSymbolType_h:
+        return (double)v.Value * 3600 * pow(10, v.Multiplier);
+    case v2gunitSymbolType_m:
+        return (double)v.Value * 60 * pow(10, v.Multiplier);
+    case v2gunitSymbolType_s:
+        return (double)v.Value * pow(10, v.Multiplier);
+    default:
+        return -1;
+    }
+}
+
+#define PHYSICAL_LT 0
+#define PHYSICAL_EQ 1
+#define PHYSICAL_GT 2
+int cmp_physical_values(struct v2gPhysicalValueType x, struct v2gPhysicalValueType y) {
+    double xval;
+    double yval;
+    if (x.Unit != y.Unit) {
+        xval = phyval_to_seconds(x);
+        yval = phyval_to_seconds(y);
+        if (xval == -1 || yval == -1) {
+            printf("cmp_physical_values: units not comparable\n");
+            return -1;
+        }
+    } else {
+        xval = (double)x.Value * pow(10,x.Multiplier);
+        yval = (double)y.Value * pow(10,y.Multiplier);
+    }
+    printf("profile = %.0lfkW, pmax = %.0lfkW\n", xval/1000, yval/1000);
+    if (xval < yval) {
+        return PHYSICAL_LT;
+    } else if (xval > yval) {
+        return PHYSICAL_GT;
+    } else {
+        return PHYSICAL_EQ;
+    }
+}
+
+int verify_charging_profile(session_t* session, uint8_t tupleid, struct v2gChargingProfileType* profile)
+{
+    int i, j;
+    uint n_profiles, n_pmax;
+    struct v2gSAScheduleTupleType* tuple = NULL;
+    if (!session->SAScheduleList_isUsed) {
+        printf("session schedule list empty, accepting any charging profiles\n");
+        return 0;
+    }
+    for (i = 0; i < session->SAScheduleList.SAScheduleTuple.arrayLen; i++) {
+        if (tupleid == session->SAScheduleList.SAScheduleTuple.array[i].SAScheduleTupleID) {
+            tuple = &session->SAScheduleList.SAScheduleTuple.array[i];
+            break;
+        }
+    }
+    n_profiles = profile->ProfileEntry.arrayLen;
+    n_pmax = tuple->PMaxSchedule.PMaxScheduleEntry.arrayLen;
+    if (tuple == NULL) {
+        printf("verify_charging_profile: tuple with tuple id %u not found\n", tupleid);
+        return -1;
+    }
+    // == The following checks prevent the loop for running out of bounds ===
+    if (n_profiles == 0) {
+        return -1;
+    }
+    if (n_profiles > v2gChargingProfileType_ProfileEntry_ARRAY_SIZE) {
+        n_profiles = v2gChargingProfileType_ProfileEntry_ARRAY_SIZE;
+    }
+    if (profile->ProfileEntry.array[0].ChargingProfileEntryStart <
+        tuple->PMaxSchedule.PMaxScheduleEntry.array[0].RelativeTimeInterval.start) {
+        printf("verify_charging_profile: charging profile exceeds minimum time bounds\n");
+        return -1;
+    }
+    if (profile->ProfileEntry.array[n_profiles - 1].ChargingProfileEntryStart
+        > tuple->PMaxSchedule.PMaxScheduleEntry.array[n_pmax - 1].RelativeTimeInterval.start
+        + tuple->PMaxSchedule.PMaxScheduleEntry.array[n_pmax - 1].RelativeTimeInterval.duration) {
+        printf("verify_charging_profile: charging profile exceeds maximum time bounds\n");
+        return -1;
+    }
+    // Verify the time order of the profile
+    for (i = 0; i < n_profiles - 1; i++) {
+        if (profile->ProfileEntry.array[i].ChargingProfileEntryStart >=
+            profile->ProfileEntry.array[i+1].ChargingProfileEntryStart) {
+            printf("verify_charging_profile: charging profile start times are not properly ordered\n");
+            return -1;
+        }
+    }
+    i = 0, j = 0;
+    while (1) {
+        printf("i=%d, j=%d\n", i, j);
+        int cmp = cmp_physical_values(profile->ProfileEntry.array[i].ChargingProfileEntryMaxPower,
+                                      tuple->PMaxSchedule.PMaxScheduleEntry.array[j].PMax);
+        if (cmp == -1) {
+            printf("verify_charging_profle error: cmp_physical_values\n");
+            return -1;
+        }
+        if (cmp == PHYSICAL_GT) {
+            printf("verify_charging_profle err: Charging profile exceeds Pmax Schedule %u\n", tupleid);
+            return -1;
+        }
+        if (i + 1 == n_profiles) {
+            if (j < n_pmax - 1) {
+                j++;
+                continue;
+            } else {
+                break;
+            }
+        }
+        if (j + 1 == n_pmax) {
+            if (i < n_profiles - 1) {
+                i++;
+                continue;
+            } else {
+                break;
+            }
+        }
+
+        if (profile->ProfileEntry.array[i+1].ChargingProfileEntryStart <
+            tuple->PMaxSchedule.PMaxScheduleEntry.array[j+1].RelativeTimeInterval.start) {
+            i++;
+        } else if (profile->ProfileEntry.array[i+1].ChargingProfileEntryStart >
+            tuple->PMaxSchedule.PMaxScheduleEntry.array[j+1].RelativeTimeInterval.start) {
+            j++;
+        } else {
+            i++;
+            j++;
+        }
+
+    }
+    return 0;
+}
 
 
+//=============================================
+//             Request Handling
+//=============================================
 
 static int handle_session_setup(struct v2gEXIDocument* exiIn, struct v2gEXIDocument* exiOut, session_t* session)
 {
@@ -154,7 +289,6 @@ static int handle_payment_detail(struct v2gEXIDocument* exiIn,
         return 0;
     }
     if (session->payment_type == v2gpaymentOptionType_Contract) {
-        session->contract.valid_crt = false;
         err = x509_crt_parse(&session->contract.crt,
                              req->ContractSignatureCertChain.Certificate.bytes,
                              req->ContractSignatureCertChain.Certificate.bytesLen);
@@ -275,7 +409,12 @@ static int handle_authorization(struct v2gEXIDocument* exiIn,
             printf("invalid signature\n");
             return 0;
         }
+        session->verified = true;
         printf("Succesful verification of signature!!!\n");
+    } else {
+        printf("handle_authorization: external payment not implemented");
+        res->ResponseCode = v2gresponseCodeType_FAILED_PaymentSelectionInvalid;
+        return 0;
     }
 	res->ResponseCode = v2gresponseCodeType_OK;
 	return 0;
@@ -287,6 +426,7 @@ static int handle_charge_parameters(struct v2gEXIDocument* exiIn,
 {
     struct v2gChargeParameterDiscoveryReqType* req = &exiIn->V2G_Message.Body.ChargeParameterDiscoveryReq;
     struct v2gChargeParameterDiscoveryResType* res = &exiOut->V2G_Message.Body.ChargeParameterDiscoveryRes;
+    struct v2gSAScheduleTupleType* tuple;
     bool valid_mode = false;
     // === Lookup session ===
     init_v2g_response(exiOut, session);
@@ -307,6 +447,67 @@ static int handle_charge_parameters(struct v2gEXIDocument* exiIn,
     if (session == NULL) {
         printf("create_response_message error: session_new\n");
         res->ResponseCode = v2gresponseCodeType_FAILED_UnknownSession;
+        return 0;
+    }
+    session->SAScheduleList_isUsed = 1;
+	res->SAScheduleList_isUsed = 1u;
+    tuple = &res->SAScheduleList.SAScheduleTuple.array[0];
+    res->SAScheduleList.SAScheduleTuple.arrayLen = 1;
+	tuple->SAScheduleTupleID = 1;
+	tuple->SalesTariff_isUsed = 1;
+	// === Maximum Power Schedule ===
+	tuple->PMaxSchedule.PMaxScheduleEntry.arrayLen = 2; // 2 Entris
+	// == PMax Schedule Entry 1 ==
+	tuple->PMaxSchedule.PMaxScheduleEntry.array[0] = (struct v2gPMaxScheduleEntryType) {
+	    .PMax = (struct v2gPhysicalValueType) {
+	        .Value=20,
+	        .Multiplier = 3, // 10^3 (=kW)
+	        .Unit = v2gunitSymbolType_W,
+	    },
+	    .RelativeTimeInterval.start = 0,
+	    .RelativeTimeInterval_isUsed = 1u,
+	    .RelativeTimeInterval.duration_isUsed =0,
+	};
+	// == PMax Schedule Entry 2 ==
+	tuple->PMaxSchedule.PMaxScheduleEntry.array[1] = (struct v2gPMaxScheduleEntryType) {
+	    .PMax = (struct v2gPhysicalValueType) {
+	        .Value=0,
+	        .Multiplier = 3,
+	        .Unit = v2gunitSymbolType_W,
+	    },
+	    .RelativeTimeInterval.start = 1200,
+	    .RelativeTimeInterval_isUsed = 1u,
+	    .RelativeTimeInterval.duration_isUsed = 1,
+	    .RelativeTimeInterval.duration = 100,
+	};
+
+    // === Sales tariffes ===
+	tuple->SalesTariff.NumEPriceLevels=2;
+	tuple->SalesTariff.NumEPriceLevels_isUsed = 1u;
+	tuple->SalesTariff.SalesTariffID=20;
+	tuple->SalesTariff.Id.characters[0]=100;
+	tuple->SalesTariff.Id.charactersLen=1;
+	tuple->SalesTariff.Id_isUsed =1;
+	tuple->SalesTariff.SalesTariffEntry.array[0].EPriceLevel=0;
+	tuple->SalesTariff.SalesTariffEntry.array[0].EPriceLevel_isUsed =1;
+	tuple->SalesTariff.SalesTariffEntry.array[0].ConsumptionCost.arrayLen =0;
+	tuple->SalesTariff.SalesTariffEntry.array[0].RelativeTimeInterval.start=0;
+	tuple->SalesTariff.SalesTariffEntry.array[0].RelativeTimeInterval_isUsed = 1;
+	tuple->SalesTariff.SalesTariffEntry.array[0].RelativeTimeInterval.duration=1200;
+	tuple->SalesTariff.SalesTariffEntry.array[0].RelativeTimeInterval.duration_isUsed =1;
+	tuple->SalesTariff.SalesTariffEntry.array[1].EPriceLevel = 1;
+    tuple->SalesTariff.SalesTariffEntry.array[1].EPriceLevel_isUsed = 1;
+    tuple->SalesTariff.SalesTariffEntry.array[1].ConsumptionCost.arrayLen =0;
+    tuple->SalesTariff.SalesTariffEntry.array[1].RelativeTimeInterval_isUsed = 1;
+	tuple->SalesTariff.SalesTariffEntry.array[1].RelativeTimeInterval.start = 1200;
+	tuple->SalesTariff.SalesTariffEntry.array[1].RelativeTimeInterval_isUsed = 1;
+    tuple->SalesTariff.SalesTariffEntry.array[1].RelativeTimeInterval.duration_isUsed =0;
+    tuple->SalesTariff.SalesTariffEntry.arrayLen = 2;
+    // === STore the schedule in the session ===
+    memcpy(&session->SAScheduleList, &res->SAScheduleList, sizeof(struct v2gSAScheduleListType));
+    if (!session->verified) {
+        printf("handle_charge_parameters: session not verified\n");
+        res->ResponseCode = v2gresponseCodeType_FAILED_SequenceError;
         return 0;
     }
     for (int i = 0; i < sizeof(ENERGY_TRANSFER_MODES)/sizeof(ENERGY_TRANSFER_MODES[0]); i++) {
@@ -330,6 +531,7 @@ int handle_power_delivery(struct v2gEXIDocument* exiIn,
 {
     struct v2gPowerDeliveryReqType* req = &exiIn->V2G_Message.Body.PowerDeliveryReq;
     struct v2gPowerDeliveryResType* res = &exiOut->V2G_Message.Body.PowerDeliveryRes;
+    int err;
     init_v2g_response(exiOut, session);
 	exiOut->V2G_Message_isUsed = 1u;
 	exiOut->V2G_Message.Body.PowerDeliveryRes_isUsed = 1u;
@@ -343,9 +545,22 @@ int handle_power_delivery(struct v2gEXIDocument* exiIn,
         res->ResponseCode = v2gresponseCodeType_FAILED_UnknownSession;
         return 0;
     }
+    if (!session->verified) {
+        printf("handle_power_delivery: session not verified\n");
+        res->ResponseCode = v2gresponseCodeType_FAILED_SequenceError;
+        return 0;
+    }
     if (req->DC_EVPowerDeliveryParameter_isUsed) {
         printf("invalid charging mode: DC not available\n");
         return -1;
+    }
+    if (req->ChargingProfile_isUsed) {
+        err = verify_charging_profile(session, req->SAScheduleTupleID, &req->ChargingProfile);
+        if (err != 0) {
+            res->ResponseCode = v2gresponseCodeType_FAILED_ChargingProfileInvalid;
+            return 0;
+        }
+        printf("handle_power_delivery: Charging profile verified\n");
     }
 	res->ResponseCode = v2gresponseCodeType_OK;
 
@@ -367,6 +582,11 @@ int handle_charging_status(struct v2gEXIDocument* exiIn,
         res->ResponseCode = v2gresponseCodeType_FAILED_UnknownSession;
         return 0;
     }
+    if (!session->verified) {
+        printf("handle_charging_status: session not verified\n");
+        res->ResponseCode = v2gresponseCodeType_FAILED_SequenceError;
+        return 0;
+    }
 	res->ResponseCode = v2gresponseCodeType_OK;
 	res->EVSEID.characters[0]=12;
 	res->EVSEID.charactersLen =1;
@@ -375,7 +595,7 @@ int handle_charging_status(struct v2gEXIDocument* exiIn,
 	res->AC_EVSEStatus.NotificationMaxDelay=123;
 	res->ReceiptRequired=1;
 	res->ReceiptRequired_isUsed =1;
-	res->EVSEMaxCurrent.Multiplier = 2;
+	res->EVSEMaxCurrent.Multiplier = 0;
 	res->EVSEMaxCurrent.Unit = v2gunitSymbolType_A;
 	res->EVSEMaxCurrent.Value = 400;
 	res->EVSEMaxCurrent_isUsed =1;

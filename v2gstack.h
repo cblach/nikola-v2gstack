@@ -58,16 +58,19 @@ typedef struct{
     struct v2gSelectedServiceType services[v2gSelectedServiceListType_SelectedService_ARRAY_SIZE];
     v2gEnergyTransferModeType energy_transfer_mode;
     v2gpaymentOptionType payment_type;
+    struct v2gSAScheduleListType SAScheduleList;
+    bool SAScheduleList_isUsed;
     byte challenge[16];
+    bool verified;
     struct{
         bool valid_crt; // Before a contract can be valid, it must have a valid crt
-        bool valid;
         byte cert[v2gCertificateChainType_Certificate_BYTES_SIZE];
         size_t cert_len;
         x509_crt crt;
         ecdsa_context pubkey;
     } contract;
     // === DO NOT MANIPULATE THE FOLLOWING FIELDS ===
+    bool tls_enabled;
     uint64_t id;
     QLock mutex;
     int refcount;

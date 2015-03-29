@@ -68,6 +68,7 @@ struct slac_iosendloop_args{
     int max_tries;
 };
 
+// Cancellable send loop, initiated which must be initiated with an IO-channel
 static ssize_t slac_iosendloop(void* vargs, atomic_int *cancel)
 {
     int err;
@@ -96,6 +97,7 @@ struct slac_iorecvloop_args{
     byte mmv;
     uint16_t mmtype;
 };
+// Cancellable receive/read loop, initiated which must be initiated with an IO-channel
 static ssize_t slac_iorecvloop(void* vargs, atomic_int *cancel)
 {
     int err;
@@ -115,7 +117,7 @@ static ssize_t slac_iorecvloop(void* vargs, atomic_int *cancel)
     return n;
 }
 
-// cancellable receive
+// Cancellable ethnernet receive/read (cancelled with a send on channel chnc)
 ssize_t slac_recv_c( ethconn_t* ethconn, byte* ethframe, byte mmv, uint16_t mmtype, Chan* chnc)
 {
     Chan iocr;
@@ -195,6 +197,7 @@ ssize_t slac_sendrecvloop( ethconn_t* ethconn, byte* ethframe, size_t framelen,
     return err;
 }
 
+// === Slac parameter discovery ===
 int slac_cm_param_req(ethconn_t* ethconn, struct slac_session* session)
 {
     byte ethframe[ETH_FRAME_LEN];
@@ -227,7 +230,6 @@ int slac_cm_param_req(ethconn_t* ethconn, struct slac_session* session)
     }
     //memcpy(session->EVSE_MAC, confirm->ethernet.OSA, ETH_ALEN);
     memcpy(session->FORWARDING_STA, confirm->FORWARDING_STA, sizeof (session->FORWARDING_STA));
-    memcpy(session->MSOUND_TARGET, confirm->MSOUND_TARGET, sizeof (session->MSOUND_TARGET));
     session->NUM_SOUNDS = confirm->NUM_SOUNDS;
     session->TIME_OUT = confirm->TIME_OUT;
     session->RESP_TYPE = confirm->RESP_TYPE;
@@ -235,12 +237,13 @@ int slac_cm_param_req(ethconn_t* ethconn, struct slac_session* session)
     return 0;
 }
 
+// === Start Attenuation Characterization ===
 int slac_cm_start_atten_char(ethconn_t* ethconn, struct slac_session* session)
 {
     int err, i;
     byte ethframe[ETH_FRAME_LEN];
 	struct cm_start_atten_char_indicate * indicate = (struct cm_start_atten_char_indicate *) (ethframe);
-	ethwritehdr(&indicate->ethernet, ethconn, session->MSOUND_TARGET);
+	ethwritehdr(&indicate->ethernet, ethconn, ETH_BROADCAST_ADDR);
     ethhomeplughdr(&indicate->homeplug, HOMEPLUG_MMV, (CM_START_ATTEN_CHAR | MMTYPE_IND));
 	indicate->APPLICATION_TYPE = SLAC_APPLICATION_TYPE;
 	indicate->SECURITY_TYPE = SLAC_SECURITY_TYPE;
@@ -266,7 +269,7 @@ int slac_cm_mnbc_sound(ethconn_t* ethconn, struct slac_session* session)
     int sound = session->NUM_SOUNDS;
     struct cm_mnbc_sound_indicate * indicate = (struct cm_mnbc_sound_indicate *) (ethframe);
 	while (sound--) {
-	    ethwritehdr(&indicate->ethernet, ethconn, session->MSOUND_TARGET);
+	    ethwritehdr(&indicate->ethernet, ethconn, ETH_BROADCAST_ADDR);
         ethhomeplughdr(&indicate->homeplug, HOMEPLUG_MMV, (CM_MNBC_SOUND | MMTYPE_IND));
 		indicate->APPLICATION_TYPE = SLAC_APPLICATION_TYPE;
 		indicate->SECURITY_TYPE = SLAC_SECURITY_TYPE;

@@ -127,6 +127,9 @@ typedef struct{
     struct sockaddr_in6* addr;
 } ioargs;
 
+// === Slave function for the SDP client ===
+// === Attempts to send the SDP message SDP_MAX_TRIES (50) times 
+// === using the multicast address provided on the provided socket===
 static ssize_t request_writer(void* args, atomic_int *cancel) {
     ioargs* wargs = args;
     byte buf[SDP_HEADER_LEN+SDP_REQ_PAYLOAD_LEN];
@@ -159,7 +162,8 @@ static ssize_t request_writer(void* args, atomic_int *cancel) {
     return 0;
 }
 
-// Read multicast responses
+// === Second slave function to the SDP client ===
+// === Attempts to read unicast responses from an SDP server ===
 static ssize_t response_reader( void* args, atomic_int *cancel ){
     ioargs* rargs = args;
     byte buf[512];
@@ -258,6 +262,7 @@ int ev_sdp_discover_evse( char* if_name, struct sockaddr_in6* evse_addr )
     iocall(&iocr, &response_reader, &rargs, sizeof(ioargs));
     iocall(&iocw, &request_writer, &wargs, sizeof(ioargs));
     // === Receive responses from iocalls ===
+    // === If the send channel times out, no SDP server has responded in time === 
     switch (alt(alts)) {
         case 0: // Done reading response
             iocancel(&iocw);

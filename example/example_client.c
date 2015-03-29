@@ -18,8 +18,11 @@
 typedef struct{
     uint64_t id;
     uint16_t charge_service_id;
-    uint8_t SAScheduleTupleID;
     byte challenge[16];
+    struct{
+        bool is_used;
+        uint8_t tupleid;
+    } pmax_schedule;
     struct{
         byte cert[v2gCertificateChainType_Certificate_BYTES_SIZE];
         size_t cert_len;
@@ -452,23 +455,30 @@ int charge_parameter_request(struct ev_tls_conn_t* conn, v2g_ev_session* ev_sess
 	req->MaxEntriesSAScheduleTuple = 1234;
 
 	req->AC_EVChargeParameter_isUsed = 1u;
-	charge_params->DepartureTime = 12345;
 
-	charge_params->EAmount.Multiplier = 0;
-	charge_params->EAmount.Unit = v2gunitSymbolType_W;
-	charge_params->EAmount.Value = 100;
-
-	charge_params->EVMaxCurrent.Multiplier = 0;
-	charge_params->EVMaxCurrent.Unit = v2gunitSymbolType_A;
-	charge_params->EVMaxCurrent.Value = 200;
-
-	charge_params->EVMaxVoltage.Multiplier = 0;
-	charge_params->EVMaxVoltage.Unit = v2gunitSymbolType_V;
-	charge_params->EVMaxVoltage.Value = 400;
-
-	charge_params->EVMinCurrent.Multiplier = 0;
-	charge_params->EVMinCurrent.Unit = v2gunitSymbolType_A;
-	charge_params->EVMinCurrent.Value = 500;
+	*charge_params = (struct v2gAC_EVChargeParameterType) {
+	    .DepartureTime = 12345,
+	    .EAmount = (struct v2gPhysicalValueType) {
+	        .Value = 20,
+	        .Multiplier = 3,
+	        .Unit = v2gunitSymbolType_Wh,
+	    },
+	    .EVMaxCurrent = (struct v2gPhysicalValueType) {
+	        .Value = 500,
+	        .Multiplier = 0,
+	        .Unit = v2gunitSymbolType_A,
+	    },
+	    .EVMinCurrent = (struct v2gPhysicalValueType) {
+	        .Value = 200,
+	        .Multiplier = 0,
+	        .Unit = v2gunitSymbolType_A,
+	    },
+	    .EVMaxVoltage = (struct v2gPhysicalValueType) {
+	        .Value = 400,
+	        .Multiplier = 0,
+	        .Unit = v2gunitSymbolType_A,
+	    },
+	};
 
 	err = v2g_request(conn, &exiIn, &exiOut);
     if (err != 0) {
@@ -485,7 +495,12 @@ int charge_parameter_request(struct ev_tls_conn_t* conn, v2g_ev_session* ev_sess
         printf("charge_parameter_request: authorization response NOT ok, code = %d\n", res->ResponseCode);
         return -1;
     }
-    ev_session->SAScheduleTupleID = res->SAScheduleList.SAScheduleTuple.array[0].SAScheduleTupleID;
+    // === Decide which tuple to use ===
+    if (res->SAScheduleList_isUsed && res->SAScheduleList.SAScheduleTuple.arrayLen > 0) {
+        // === One can implement advanced logic to decide which tuple should be used here ===
+        ev_session->pmax_schedule.is_used = true;
+        ev_session->pmax_schedule.tupleid = res->SAScheduleList.SAScheduleTuple.array[0].SAScheduleTupleID;
+    }
     // === Print digest ===
 	printACEVSEStatus(&(res->AC_EVSEChargeParameter.AC_EVSEStatus));
 	printf("\t EVSEProcessing=%d\n", res->EVSEProcessing);
@@ -508,28 +523,57 @@ int power_delivery_request(struct ev_tls_conn_t* conn, v2g_ev_session* ev_sessio
 	exiIn.V2G_Message.Body.PowerDeliveryReq.DC_EVPowerDeliveryParameter_isUsed = 0; /* DC parameters are send */
 	exiIn.V2G_Message.Body.PowerDeliveryReq.ChargeProgress = v2gchargeProgressType_Start;
 
-	/* we are using a charging profile */
+	// === A charging profile is used for this request===
 	exiIn.V2G_Message.Body.PowerDeliveryReq.ChargingProfile_isUsed = 1u;
-	exiIn.V2G_Message.Body.PowerDeliveryReq.SAScheduleTupleID  = ev_session->SAScheduleTupleID;
+	exiIn.V2G_Message.Body.PowerDeliveryReq.SAScheduleTupleID  = ev_session->pmax_schedule.tupleid;
+    // Max 5 charging profile entries (3 being used)
 
-    // Max 5 profile entries
-	profile->ProfileEntry.arrayLen=3;
-	profile->ProfileEntry.array[0].ChargingProfileEntryMaxPower.Value=0;
-	profile->ProfileEntry.array[0].ChargingProfileEntryMaxPower.Unit = v2gunitSymbolType_W;
-	profile->ProfileEntry.array[0].ChargingProfileEntryMaxPower.Multiplier=2;
-	profile->ProfileEntry.array[0].ChargingProfileEntryStart=0;
-	profile->ProfileEntry.array[0].ChargingProfileEntryMaxNumberOfPhasesInUse=1;
-	profile->ProfileEntry.array[0].ChargingProfileEntryMaxNumberOfPhasesInUse_isUsed=1;
-	profile->ProfileEntry.array[1].ChargingProfileEntryMaxPower.Value=20000;
-	profile->ProfileEntry.array[1].ChargingProfileEntryMaxPower.Unit = v2gunitSymbolType_W;
-	profile->ProfileEntry.array[1].ChargingProfileEntryMaxPower.Multiplier = 1;
-	profile->ProfileEntry.array[1].ChargingProfileEntryMaxNumberOfPhasesInUse=3;
-	profile->ProfileEntry.array[1].ChargingProfileEntryMaxNumberOfPhasesInUse_isUsed=1;
-	profile->ProfileEntry.array[1].ChargingProfileEntryStart=300; /* 5min */
-	profile->ProfileEntry.array[2].ChargingProfileEntryMaxPower.Value=0;
-	profile->ProfileEntry.array[2].ChargingProfileEntryStart=1200; /* 20min */
-	profile->ProfileEntry.array[2].ChargingProfileEntryMaxNumberOfPhasesInUse=3;
-	profile->ProfileEntry.array[2].ChargingProfileEntryMaxNumberOfPhasesInUse_isUsed=1;
+	profile->ProfileEntry.arrayLen = 4;
+
+    // === Charging Profile Entry 1 ===
+	profile->ProfileEntry.array[0] = (struct v2gProfileEntryType) {
+	    .ChargingProfileEntryMaxPower = (struct v2gPhysicalValueType) {
+	        .Value = 15,
+	        .Multiplier = 3, // * 10^3 (e.g. kW)
+	        .Unit = v2gunitSymbolType_W,
+	    },
+	    .ChargingProfileEntryStart = 0,
+	    .ChargingProfileEntryMaxNumberOfPhasesInUse = 3,
+	    .ChargingProfileEntryMaxNumberOfPhasesInUse_isUsed = 1,
+	};
+    // === Charging Profile Entry 2 ===
+	profile->ProfileEntry.array[1] = (struct v2gProfileEntryType) {
+	    .ChargingProfileEntryMaxPower = (struct v2gPhysicalValueType) {
+	        .Value = 20,
+	        .Multiplier = 3, // * 10^3 (e.g. kW)
+	        .Unit = v2gunitSymbolType_W,
+	    },
+	    .ChargingProfileEntryStart = 100,
+	    .ChargingProfileEntryMaxNumberOfPhasesInUse = 3,
+	    .ChargingProfileEntryMaxNumberOfPhasesInUse_isUsed = 1,
+	};
+    // === Charging Profile Entry 3 ===
+	profile->ProfileEntry.array[2] = (struct v2gProfileEntryType) {
+	    .ChargingProfileEntryMaxPower = (struct v2gPhysicalValueType) {
+	        .Value = 10,
+	        .Multiplier = 3, // * 10^3 (e.g. kW)
+	        .Unit = v2gunitSymbolType_W,
+	    },
+	    .ChargingProfileEntryStart = 200,
+	    .ChargingProfileEntryMaxNumberOfPhasesInUse = 3,
+	    .ChargingProfileEntryMaxNumberOfPhasesInUse_isUsed = 1,
+	};
+    // === Charging Profile Entry 4 ===
+	profile->ProfileEntry.array[3] = (struct v2gProfileEntryType) {
+	    .ChargingProfileEntryMaxPower = (struct v2gPhysicalValueType) {
+	        .Value = 0,
+	        .Multiplier = 3, // * 10^3 (e.g. kW)
+	        .Unit = v2gunitSymbolType_W,
+	    },
+	    .ChargingProfileEntryStart = 400,
+	    .ChargingProfileEntryMaxNumberOfPhasesInUse = 3,
+	    .ChargingProfileEntryMaxNumberOfPhasesInUse_isUsed = 1,
+	};
 	err = v2g_request(conn, &exiIn, &exiOut);
     if (err != 0) {
         printf("power_delivery_request v2g_request error, exiting\n");

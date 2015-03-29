@@ -1079,7 +1079,7 @@ int evcc_connect_tls( struct ev_tls_conn_t* conn )
         printf("threadcreate error");
         goto exit;
     }
-    qlockinit( &conn->mutex );
+    memset(&conn->mutex, 0, sizeof(conn->mutex));
     err = v2g_handshake_request( conn );
     if( err != 0 ){
         printf("v2g handshake error\n");

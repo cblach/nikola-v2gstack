@@ -56,7 +56,7 @@ threadmain( int argc,
     //testEth();
     if( Node_Type == EV_NODE ) {
         if (Slac_Enable) {
-            switch_power_line(V2G_Network_Interface, EVMAC, true);
+            switch_power_line(V2G_Network_Interface, EVMAC, false);
             printf("=== STARTING SLAC ASSOCIATION ===\n");
             while(slac_associate(V2G_Network_Interface) != 0){
                 printf("something went wrong, trying again\n");
@@ -67,7 +67,7 @@ threadmain( int argc,
         ev_example(V2G_Network_Interface);
         //struct ev_request_t req;
     } else if( Node_Type == EVSE_NODE ) {
-        switch_power_line(V2G_Network_Interface, EVSEMAC, true);
+        switch_power_line(V2G_Network_Interface, EVSEMAC, false);
         if (Slac_Enable) {
             printf("SLAC enabled\n");
             plgp_slac_listen(V2G_Network_Interface, EVSEMAC);

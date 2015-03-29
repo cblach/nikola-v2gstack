@@ -91,7 +91,7 @@ int init_sessions()//
         printf("main: map_create failed\n");
         return -1;
     }
-    qlockinit( &session_map_mutex );
+    memset( &session_map_mutex, 0, sizeof(session_map_mutex) );
     return 0;
 }
 
@@ -118,7 +118,7 @@ session_t* session_lookup( uint64_t sessionid )
     return *sessionpp;
 }
 
-session_t* session_new()
+session_t* session_new(bool tls_enabled)
 {
     union Key k;
     // Must be hex binary
@@ -138,6 +138,7 @@ session_t* session_new()
     }
     memset(*sessionpp, 0, sizeof(session_t));
     qunlock( &session_map_mutex );
+    (*sessionpp)->tls_enabled = tls_enabled;
     (*sessionpp)->id = k.u64;
     (*sessionpp)->status = SESSION_ACTIVE;
     (*sessionpp)->refcount = 1;
