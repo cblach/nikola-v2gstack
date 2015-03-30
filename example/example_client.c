@@ -233,6 +233,7 @@ static int verify_response_code(v2gresponseCodeType code)
 
 void init_v2g_request(struct v2gEXIDocument* exiIn, v2g_ev_session* ev_session)
 {
+    //memset(exiIn, 0, sizeof(*exiIn));
     init_v2gEXIDocument(exiIn);
 	exiIn->V2G_Message_isUsed = 1u;
 	init_v2gMessageHeaderType(&exiIn->V2G_Message.Header);
@@ -263,6 +264,8 @@ int session_request(struct ev_tls_conn_t* conn, v2g_ev_session* ev_session)
 
 	exiIn.V2G_Message.Body.SessionSetupReq.EVCCID.bytesLen = 1;
 	exiIn.V2G_Message.Body.SessionSetupReq.EVCCID.bytes[0] = 20;
+
+	printf("VAR = %u\n", exiIn.V2G_Message_isUsed);
 	err = v2g_request(conn, &exiIn, &exiOut);
     if (err != 0) {
         printf("unable to do v2g_request, exiting\n");
@@ -649,6 +652,7 @@ void ev_example(char* if_name)
 {
     struct ev_tls_conn_t conn;
     v2g_ev_session ev_session;
+    memset(&conn, 0, sizeof(struct ev_tls_conn_t));
     memset(&ev_session, 0, sizeof(v2g_ev_session));
     load_contract("certs/contract.key", &ev_session);
     int err;
@@ -656,7 +660,7 @@ void ev_example(char* if_name)
         printf("main: ev_sdp_discover_evse error\n");
         return;
     }
-    printf("threadcreate\n");
+    printf("connecting to secc\n");
     err = evcc_connect_tls(&conn);
     if( err != 0 ){
         printf("main: evcc_connect_tls error\n");

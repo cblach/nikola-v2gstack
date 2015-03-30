@@ -1,6 +1,6 @@
 CC=clang
 LD=clang
-CFLAGS=-Wall -pedantic -std=gnu11 -fno-strict-aliasing
+CFLAGS=-Wall -pedantic -std=gnu11 -fno-strict-aliasing -g
 LDFLAGS=
 
 TARGET=example.out

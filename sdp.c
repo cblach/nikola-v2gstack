@@ -9,6 +9,7 @@
 #include <inttypes.h>
 #include "multitask.h"
 #include <assert.h>
+#include <time.h>
 
 #define SDP_ENFORCE_STRICT_SECURITY_REQUIREMENT 1
 #define SDP_VERSION 0x01
@@ -128,7 +129,7 @@ typedef struct{
 } ioargs;
 
 // === Slave function for the SDP client ===
-// === Attempts to send the SDP message SDP_MAX_TRIES (50) times 
+// === Attempts to send the SDP message SDP_MAX_TRIES (50) times
 // === using the multicast address provided on the provided socket===
 static ssize_t request_writer(void* args, atomic_int *cancel) {
     ioargs* wargs = args;
@@ -262,7 +263,7 @@ int ev_sdp_discover_evse( char* if_name, struct sockaddr_in6* evse_addr )
     iocall(&iocr, &response_reader, &rargs, sizeof(ioargs));
     iocall(&iocw, &request_writer, &wargs, sizeof(ioargs));
     // === Receive responses from iocalls ===
-    // === If the send channel times out, no SDP server has responded in time === 
+    // === If the send channel times out, no SDP server has responded in time ===
     switch (alt(alts)) {
         case 0: // Done reading response
             iocancel(&iocw);

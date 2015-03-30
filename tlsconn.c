@@ -94,6 +94,17 @@ uint16_t SECC_Port;
 //            Error print
 //======================================
 
+void print_byte_array( byte* arr, size_t n )
+{
+    int i;
+    printf("[");
+    // Highly ineffictive but whatever it's TESTING!! :D
+    for( i = 0; i < n; i++) {
+        printf( " %02x", arr[i] );
+    }
+    printf(" ]\n");
+}
+
 void print_ssl_read_err( int err)
 {
     switch (err) {
@@ -602,6 +613,8 @@ void secc_handle_tls( void* arg )
         };
         struct v2gEXIDocument exi_in;
         struct v2gEXIDocument exi_out;
+        printf("HERE:\n");
+        print_byte_array(stream.data, buffer_pos);
         err = deserializeStream2EXI(&stream, &exi_in);
         if (err != 0) {
             printf("secc_handle_tls: handle decoding error\n");
@@ -907,6 +920,8 @@ int v2g_request( struct ev_tls_conn_t* conn, struct v2gEXIDocument* exiIn,
         printf("v2g_request error: serializeEXI2Stream\n");
 	    return err;
 	}
+	printf("HERE\n");
+	print_byte_array(stream.data, buffer_pos);
     len = v2g_raw_request( conn, buffer, buffer_pos, BUFFER_SIZE, req_timeout );
     if (len <= 0) {
         printf("v2g_request error: v2g_raw_request\n");
@@ -1019,13 +1034,14 @@ int evcc_connect_tls( struct ev_tls_conn_t* conn )
         printf( " failed\n  !  x509_crt_parse returned %d\n\n", err );
         goto exit;
     }
+    printf("\n");
     err = connect( conn->serverfd, (struct sockaddr*)&conn->addr,
                    sizeof( struct sockaddr_in6) );
     if( err != 0 ) {
         perror("connect");
         goto exit;
     }
-    printf("connected\n");
+    printf("debug: connected\n");
     // === init ssl ==
     memset( &conn->ssl, 0, sizeof(ssl_context) );
     ssl_init( &conn->ssl );
@@ -1074,17 +1090,18 @@ int evcc_connect_tls( struct ev_tls_conn_t* conn )
         printf( " ok\n" );
     }
 	conn->alive = true;
+    memset(&conn->mutex, 0, sizeof(conn->mutex));
     err = threadcreate( evcc_connect_tls_stream_reader, conn, 1024 * 1024 );
     if( err != 0 ){
         printf("threadcreate error");
         goto exit;
     }
-    memset(&conn->mutex, 0, sizeof(conn->mutex));
     err = v2g_handshake_request( conn );
     if( err != 0 ){
         printf("v2g handshake error\n");
         return -1; // stuff is freed in stream reader
     }
+    printf("TLS handshake succesful\n");
     return 0;
     // === Only ends here if an error has happened ===
     exit:

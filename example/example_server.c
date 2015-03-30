@@ -642,6 +642,7 @@ static int create_response_message(struct v2gEXIDocument* exiIn, struct v2gEXIDo
 	int err = -1;//ERROR_UNEXPECTED_REQUEST_MESSAGE;
     session_t* session;
 	/* create response message as EXI document */
+	printf("ismessage %u, issessionsetup %u\n", exiIn->V2G_Message_isUsed, exiIn->V2G_Message.Body.SessionSetupReq_isUsed);
 	if (exiIn->V2G_Message_isUsed) {
 	    session = session_lookup_exi(exiIn);
 	    session_lock(session);
@@ -707,6 +708,8 @@ static int create_response_message(struct v2gEXIDocument* exiIn, struct v2gEXIDo
 		}
 		session_unlock(session);
 		session_remove_ref(session);
+	} else {
+	    printf("V2GMessage not used\n");
 	}
 	if (err != 0) {
         printf("Handle request returning %d\n", err);

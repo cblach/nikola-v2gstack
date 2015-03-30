@@ -118,7 +118,7 @@ session_t* session_lookup( uint64_t sessionid )
     return *sessionpp;
 }
 
-session_t* session_new(bool tls_enabled)
+session_t* session_new(/*bool tls_enabled*/)
 {
     union Key k;
     // Must be hex binary
@@ -138,7 +138,7 @@ session_t* session_new(bool tls_enabled)
     }
     memset(*sessionpp, 0, sizeof(session_t));
     qunlock( &session_map_mutex );
-    (*sessionpp)->tls_enabled = tls_enabled;
+   /* (*sessionpp)->tls_enabled = tls_enabled;*/
     (*sessionpp)->id = k.u64;
     (*sessionpp)->status = SESSION_ACTIVE;
     (*sessionpp)->refcount = 1;

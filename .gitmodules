@@ -1,0 +1,3 @@
+[submodule "utils/libmultitask"]
+	path = utils/libmultitask
+	url = https://github.com/zhasha/libmultitask.git
