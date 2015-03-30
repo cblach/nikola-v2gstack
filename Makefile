@@ -1,6 +1,6 @@
-CC=clang
+CC=clang -Wall -pedantic -std=gnu11
 LD=ar
-CFLAGS=-Wall -pedantic -std=gnu11
+CFLAGS=-g -O0
 LDFLAGS=rcs
 
 TARGET=libnikolav2g.a

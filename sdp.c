@@ -10,6 +10,7 @@
 #include "multitask.h"
 #include <assert.h>
 #include <time.h>
+#include <limits.h>
 
 #define SDP_ENFORCE_STRICT_SECURITY_REQUIREMENT 1
 #define SDP_VERSION 0x01
@@ -243,13 +244,13 @@ int ev_sdp_discover_evse( char* if_name, struct sockaddr_in6* evse_addr )
     memcpy( &dest.sin6_addr.s6_addr, SDP_MULTICAST_ADDR, 16);
     printf("Preparing to send\n");
     fflush(stdout);
-    err = iochaninit(&iocr, 0);
+    err = iochaninit(&iocr, 1048576 - PTHREAD_STACK_MIN);
     if (err != 0) {
         printf("ev_sdp_discover_evse: iochaninit error\n");
         close(sock);
         return -1;
     }
-    err = iochaninit(&iocw, 0);
+    err = iochaninit(&iocw, 1048576 - PTHREAD_STACK_MIN);
     if (err != 0) {
         printf("ev_sdp_discover_evse: iochaninit error\n");
         close(sock);

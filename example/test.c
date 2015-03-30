@@ -48,29 +48,12 @@ void parseFlags( int argc, char **argv ){
     }
 }
 
-
-
-void handler(int sig) {
-  void *array[10];
-  size_t size;
-
-  // get void*'s for all entries on the stack
-  size = backtrace(array, 10);
-
-  // print out all the frames to stderr
-  printf("RIIP\n");
-  fprintf(stderr, "Error: signal %d:\n", sig);
-  backtrace_symbols_fd(array, size, STDERR_FILENO);
-  exit(1);
-}
-
 static byte EVMAC[6] = {0x00, 0x05, 0xB6, 0x01, 0x86, 0xBD};
 static byte EVSEMAC[6] = {0x00, 0x05, 0xB6, 0x01, 0x88, 0xA3};
 void
 threadmain( int argc,
        char *argv[] )
 {
-    signal(SIGSEGV, handler);
     parseFlags( argc, argv );
     //testEth();
     if( Node_Type == EV_NODE ) {

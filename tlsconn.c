@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <limits.h>
 #include "polarssl/ssl_cache.h"
 
 #include "appHandEXIDatatypes.h"
@@ -183,7 +184,7 @@ static int sslreadn( ssl_context *ssl, byte* buffer,
         .n = n,
     };
     Chan ioc;
-    int err = iochaninit(&ioc, 0);
+    int err = iochaninit(&ioc, 1048576 - PTHREAD_STACK_MIN);
     ssize_t ret;
     if (err != 0) {
         printf("sslreadn error: iochaninit error\n");
@@ -223,7 +224,7 @@ static int sslwriten( ssl_context *ssl, byte* buffer,
         .n = n,
     };
     Chan ioc;
-    int err = iochaninit(&ioc, 0);
+    int err = iochaninit(&ioc, 1048576 - PTHREAD_STACK_MIN);
     ssize_t ret;
     if (err != 0) {
         printf("sslwriten error: iochaninit error\n");
@@ -613,8 +614,6 @@ void secc_handle_tls( void* arg )
         };
         struct v2gEXIDocument exi_in;
         struct v2gEXIDocument exi_out;
-        printf("HERE:\n");
-        print_byte_array(stream.data, buffer_pos);
         err = deserializeStream2EXI(&stream, &exi_in);
         if (err != 0) {
             printf("secc_handle_tls: handle decoding error\n");
@@ -920,8 +919,6 @@ int v2g_request( struct ev_tls_conn_t* conn, struct v2gEXIDocument* exiIn,
         printf("v2g_request error: serializeEXI2Stream\n");
 	    return err;
 	}
-	printf("HERE\n");
-	print_byte_array(stream.data, buffer_pos);
     len = v2g_raw_request( conn, buffer, buffer_pos, BUFFER_SIZE, req_timeout );
     if (len <= 0) {
         printf("v2g_request error: v2g_raw_request\n");
@@ -1099,7 +1096,7 @@ int evcc_connect_tls( struct ev_tls_conn_t* conn )
     err = v2g_handshake_request( conn );
     if( err != 0 ){
         printf("v2g handshake error\n");
-        return -1; // stuff is freed in stream reader
+        goto exit; // stuff is freed in stream reader
     }
     printf("TLS handshake succesful\n");
     return 0;

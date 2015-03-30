@@ -1,6 +1,6 @@
-CC=clang
+CC=clang -Wall -pedantic -std=gnu11
 LD=ar
-CFLAGS=-Wall -pedantic -std=gnu11
+CFLAGS=
 LDFLAGS=rcs
 
 TARGET=libOpenV2G.a

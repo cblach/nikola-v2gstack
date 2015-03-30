@@ -5,6 +5,7 @@
 #include <assert.h>
 #include <endian.h>
 #include "multitask.h"
+#include <limits.h>
 /*#define HOMEPLUG_MMV 0x01
 #define HOMEPLUG_MMTYPE 0x0000*/
 #define HOMEPLUG_HDR_SIZE 5
@@ -130,7 +131,7 @@ ssize_t slac_recv_c( ethconn_t* ethconn, byte* ethframe, byte mmv, uint16_t mmty
                                   .ethframe = ethframe,
                                   .mmv = mmv,
                                   .mmtype = mmtype};
-    iochaninit(&iocr, 0);
+    iochaninit(&iocr, 1048576 - PTHREAD_STACK_MIN);
     iocall(&iocr, &slac_iorecvloop, &rargs, sizeof(rargs));
     switch (alt(alts)) {
         case 0: // Done reading response
@@ -174,8 +175,8 @@ ssize_t slac_sendrecvloop( ethconn_t* ethconn, byte* ethframe, size_t framelen,
                                   .framelen = framelen,
                                   .senddelay_ns = senddelay_ns,
                                   .max_tries = max_send_tries};
-	iochaninit(&iocr, 0);
-	iochaninit(&iocs, 0);
+	iochaninit(&iocr, 1048576 - PTHREAD_STACK_MIN);
+	iochaninit(&iocs, 1048576 - PTHREAD_STACK_MIN);
 	iocall(&iocr, &slac_iorecvloop, &rargs, sizeof(rargs));
 	iocall(&iocs, &slac_iosendloop, &sargs, sizeof(sargs));
     switch (alt(alts)) {
