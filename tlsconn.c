@@ -150,7 +150,6 @@ static ssize_t iocall_sslreadn( void* args, atomic_int *cancel )
             continue;
         }
         if (ret < 1) {
-            printf("RIP sslreadn\n");
             print_ssl_read_err(ret);
             return -1;
         }
