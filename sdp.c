@@ -211,13 +211,25 @@ int ev_sdp_discover_evse( char* if_name, struct sockaddr_in6* evse_addr )
     int sock, err;
     ssize_t ret;
     struct sockaddr_in6 dest;
-    Chan iocr, iocw;
-    Alt alts[] = {{ .c  = &iocr, .v  = &ret, .op = CHANRECV },
-                  { .c  = &iocw, .v  = &ret, .op = CHANRECV },
+    Chan *iocr = iochan(1048576 - PTHREAD_STACK_MIN);
+    Chan *iocw = iochan(1048576 - PTHREAD_STACK_MIN);;
+    Alt alts[] = {{ .c  = iocr, .v  = &ret, .op = CHANRECV },
+                  { .c  = iocw, .v  = &ret, .op = CHANRECV },
                   { .op = CHANEND }};
+    unsigned int if_index;
     ioargs rargs, wargs;
+	if (iocr == NULL || iocw == NULL) {
+	    printf("slac_sendrecvloop: iochan error\n");
+	    if (iocr != NULL) {
+	        chanfree(iocr);
+	    }
+	    if (iocw != NULL) {
+	        chanfree(iocw);
+	    }
+	    return -1;
+	}
     // === Get interface index ===
-    unsigned int if_index = if_nametoindex(if_name);
+    if_index = if_nametoindex(if_name);
     if (if_index == 0) {
         perror("interface_index");
         return -1;
@@ -244,35 +256,22 @@ int ev_sdp_discover_evse( char* if_name, struct sockaddr_in6* evse_addr )
     memcpy( &dest.sin6_addr.s6_addr, SDP_MULTICAST_ADDR, 16);
     printf("Preparing to send\n");
     fflush(stdout);
-    err = iochaninit(&iocr, 1048576 - PTHREAD_STACK_MIN);
-    if (err != 0) {
-        printf("ev_sdp_discover_evse: iochaninit error\n");
-        close(sock);
-        return -1;
-    }
-    err = iochaninit(&iocw, 1048576 - PTHREAD_STACK_MIN);
-    if (err != 0) {
-        printf("ev_sdp_discover_evse: iochaninit error\n");
-        close(sock);
-        chanfree(&iocr);
-        return -1;
-    }
     rargs.sockfd = sock;
     rargs.addr = evse_addr;
     wargs.sockfd = sock;
     wargs.addr = &dest;
-    iocall(&iocr, &response_reader, &rargs, sizeof(ioargs));
-    iocall(&iocw, &request_writer, &wargs, sizeof(ioargs));
+    iocall(iocr, &response_reader, &rargs, sizeof(ioargs));
+    iocall(iocw, &request_writer, &wargs, sizeof(ioargs));
     // === Receive responses from iocalls ===
     // === If the send channel times out, no SDP server has responded in time ===
     switch (alt(alts)) {
         case 0: // Done reading response
-            iocancel(&iocw);
+            iocancel(iocw);
             printf("received response\n");
             err = ret;
             break;
         case 1: // Done writing and no response -> error
-            iocancel(&iocr);
+            iocancel(iocr);
             err = -1;
             break;
         default:
@@ -281,8 +280,8 @@ int ev_sdp_discover_evse( char* if_name, struct sockaddr_in6* evse_addr )
     }
 
     printf("done, returning with %d\n", err);
-    chanfree(&iocr);
-    chanfree(&iocw);
+    chanfree(iocr);
+    chanfree(iocw);
     close(sock);
     return err;
 }

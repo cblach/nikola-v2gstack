@@ -121,25 +121,28 @@ static ssize_t slac_iorecvloop(void* vargs, atomic_int *cancel)
 // Cancellable ethnernet receive/read (cancelled with a send on channel chnc)
 ssize_t slac_recv_c( ethconn_t* ethconn, byte* ethframe, byte mmv, uint16_t mmtype, Chan* chnc)
 {
-    Chan iocr;
     ssize_t ret;
     ssize_t err;
-    Alt alts[] = {{ .c  = &iocr, .v  = &ret, .op = CHANRECV },
+    Chan* iocr = iochan(1048576 - PTHREAD_STACK_MIN);
+    Alt alts[] = {{ .c  = iocr, .v  = &ret, .op = CHANRECV },
                   { .c  = chnc, .v  = NULL, .op = CHANRECV },
                   { .op = CHANEND }};
     struct slac_iorecvloop_args rargs = {.ethconn = ethconn,
                                   .ethframe = ethframe,
                                   .mmv = mmv,
                                   .mmtype = mmtype};
-    iochaninit(&iocr, 1048576 - PTHREAD_STACK_MIN);
-    iocall(&iocr, &slac_iorecvloop, &rargs, sizeof(rargs));
+    if (iocr == NULL) {
+        printf("slac_recv_c: iochan err\n");
+        return -1;
+    }
+    iocall(iocr, &slac_iorecvloop, &rargs, sizeof(rargs));
     switch (alt(alts)) {
         case 0: // Done reading response
             printf("received valid response\n");
             err = ret;
             break;
         case 1: // Done writing and no response -> error
-            iocancel(&iocr);
+            iocancel(iocr);
             err = -1;
             printf("timeout\n");
             break;
@@ -147,7 +150,7 @@ ssize_t slac_recv_c( ethconn_t* ethconn, byte* ethframe, byte mmv, uint16_t mmty
             printf("critical ev_sdp_discover_evse: alt error\n");
             abort();
     }
-    chanfree(&iocr);
+    chanfree(iocr);
     return err;
 }
 
@@ -160,11 +163,12 @@ ssize_t slac_sendrecvloop( ethconn_t* ethconn, byte* ethframe, size_t framelen,
                        byte recv_mmv, uint16_t recv_mmtype,
                        int max_send_tries, uvlong senddelay_ns )
 {
-    Chan iocr, iocs;
     ssize_t ret;
     ssize_t err;
-    Alt alts[] = {{ .c  = &iocr, .v  = &ret, .op = CHANRECV },
-                  { .c  = &iocs, .v  = &ret, .op = CHANRECV },
+	Chan* iocr = iochan(1048576 - PTHREAD_STACK_MIN);
+	Chan* iocs = iochan(1048576 - PTHREAD_STACK_MIN);
+    Alt alts[] = {{ .c  = iocr, .v  = &ret, .op = CHANRECV },
+                  { .c  = iocs, .v  = &ret, .op = CHANRECV },
                   { .op = CHANEND }};
     struct slac_iorecvloop_args rargs = {.ethconn = ethconn,
                                   .ethframe = ethframe,
@@ -175,26 +179,34 @@ ssize_t slac_sendrecvloop( ethconn_t* ethconn, byte* ethframe, size_t framelen,
                                   .framelen = framelen,
                                   .senddelay_ns = senddelay_ns,
                                   .max_tries = max_send_tries};
-	iochaninit(&iocr, 1048576 - PTHREAD_STACK_MIN);
-	iochaninit(&iocs, 1048576 - PTHREAD_STACK_MIN);
-	iocall(&iocr, &slac_iorecvloop, &rargs, sizeof(rargs));
-	iocall(&iocs, &slac_iosendloop, &sargs, sizeof(sargs));
+	if (iocr == NULL || iocs == NULL) {
+	    printf("slac_sendrecvloop: iochan error\n");
+	    if (iocr != NULL) {
+	        chanfree(iocr);
+	    }
+	    if (iocs != NULL) {
+	        chanfree(iocs);
+	    }
+	    return -1;
+	}
+	iocall(iocr, &slac_iorecvloop, &rargs, sizeof(rargs));
+	iocall(iocs, &slac_iosendloop, &sargs, sizeof(sargs));
     switch (alt(alts)) {
         case 0: // Done reading response
-            iocancel(&iocs);
+            iocancel(iocs);
             printf("received valid response\n");
             err = ret;
             break;
         case 1: // Done writing and no response -> error
-            iocancel(&iocr);
+            iocancel(iocr);
             err = -1;
             break;
         default:
             printf("critical ev_sdp_discover_evse: alt error\n");
             abort();
     }
-    chanfree(&iocr);
-    chanfree(&iocs);
+    chanfree(iocr);
+    chanfree(iocs);
     return err;
 }
 

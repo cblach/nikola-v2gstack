@@ -150,6 +150,7 @@ static ssize_t iocall_sslreadn( void* args, atomic_int *cancel )
             continue;
         }
         if (ret < 1) {
+            printf("RIP sslreadn\n");
             print_ssl_read_err(ret);
             return -1;
         }
@@ -183,15 +184,15 @@ static int sslreadn( ssl_context *ssl, byte* buffer,
         .buffer = buffer,
         .n = n,
     };
-    Chan ioc;
-    int err = iochaninit(&ioc, 1048576 - PTHREAD_STACK_MIN);
     ssize_t ret;
-    if (err != 0) {
-        printf("sslreadn error: iochaninit error\n");
+    int err;
+    Chan *ioc = iochan(1048576 - PTHREAD_STACK_MIN);
+    if (ioc == NULL) {
+        printf("sslreadn error: iochan error\n");
         return -1;
     }
-    iocall(&ioc, &iocall_sslreadn, &args, sizeof(args));
-    alts[0].c = &ioc;
+    iocall(ioc, &iocall_sslreadn, &args, sizeof(args));
+    alts[0].c = ioc;
     alts[0].v = &ret;
     alts[0].op = CHANRECV;
     alts[1].c = tc;
@@ -203,7 +204,7 @@ static int sslreadn( ssl_context *ssl, byte* buffer,
             err = (int)ret;
             break;
         case 1:
-            iocancel(&ioc);
+            iocancel(ioc);
             printf("sslreadn error: timeout\n");
             err = -1;
             break;
@@ -211,7 +212,7 @@ static int sslreadn( ssl_context *ssl, byte* buffer,
             printf("critical sslreadn: alt error\n");
             abort();
     }
-    chanfree(&ioc);
+    chanfree(ioc);
     return err;
 }
 
@@ -223,15 +224,15 @@ static int sslwriten( ssl_context *ssl, byte* buffer,
         .buffer = buffer,
         .n = n,
     };
-    Chan ioc;
-    int err = iochaninit(&ioc, 1048576 - PTHREAD_STACK_MIN);
     ssize_t ret;
-    if (err != 0) {
-        printf("sslwriten error: iochaninit error\n");
+    int err;
+    Chan *ioc = iochan(1048576 - PTHREAD_STACK_MIN);
+    if (ioc == NULL) {
+        printf("sslwriten error: iochan error\n");
         return -1;
     }
-    iocall(&ioc, &iocall_sslwriten, &args, sizeof(args));
-    alts[0].c = &ioc;
+    iocall(ioc, &iocall_sslwriten, &args, sizeof(args));
+    alts[0].c = ioc;
     alts[0].v = &ret;
     alts[0].op = CHANRECV;
     alts[1].c = tc;
@@ -243,7 +244,7 @@ static int sslwriten( ssl_context *ssl, byte* buffer,
             err = (int) ret;
             break;
         case 1:
-            iocancel(&ioc);
+            iocancel(ioc);
             printf("sslwriten error: timeout\n");
             err = -1;
             break;
@@ -251,7 +252,7 @@ static int sslwriten( ssl_context *ssl, byte* buffer,
             printf("critical sslwriten: alt error\n");
             abort();
     }
-    chanfree(&ioc);
+    chanfree(ioc);
     return err;
 }
 
