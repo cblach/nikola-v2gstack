@@ -719,12 +719,17 @@ static int create_response_message(struct v2gEXIDocument* exiIn, struct v2gEXIDo
 
 void evse_example(char* if_name)
 {
-    int tls_port, sockfd;
+    int tls_port, tcp_port, tls_sockfd, tcp_sockfd;
     init_sessions();
     // === Bind to dynamic port ===
-    sockfd = bind_tls(&tls_port);
-    if (sockfd < 0) {
-        printf( " secc_bind_tls  returned %d\n", sockfd );
+    tls_sockfd = bind_v2gport(&tls_port);
+    if (tls_sockfd < 0) {
+        printf( " secc_bind_tls  returned %d\n", tls_sockfd );
+        return;
+    }
+    tcp_sockfd = bind_v2gport(&tcp_port);
+    if (tcp_sockfd < 0) {
+        printf( " secc_bind_tls  returned %d\n", tcp_sockfd );
         return;
     }
     printf( "start sdp listen\n");/*
@@ -733,7 +738,11 @@ void evse_example(char* if_name)
         .tls_port = tls_port,
     };
     threadcreate( evse_sdp_listen_discovery_msg, &sdp_args, 1024 * 1024);*/
-    sdp_listen(if_name, tls_port);
-    secc_listen_tls( sockfd, &create_response_message );
+
+    secc_listen_tls( tls_sockfd, &create_response_message );
+    secc_listen_tcp( tcp_sockfd, &create_response_message );
+    // Set port to 0 to disable tls or tcp
+    // (always do sdp_listen after secc_listen_*)
+    sdp_listen(if_name, tls_port, tcp_port);
 
 }

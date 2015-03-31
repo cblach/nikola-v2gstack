@@ -127,6 +127,7 @@ int get_interface_ipv6_address( char* if_name,
 typedef struct{
     int sockfd;
     struct sockaddr_in6* addr;
+    byte secc_security;
 } ioargs;
 
 // === Slave function for the SDP client ===
@@ -138,10 +139,12 @@ static ssize_t request_writer(void* args, atomic_int *cancel) {
     byte* payload = buf + SDP_HEADER_LEN;
     ssize_t sentsz;
     int i = 0;
+    byte secc_security = wargs->secc_security;
     // === Set Multicast Data ===
     write_header(buf, SDP_REQ_TYPE, SDP_REQ_PAYLOAD_LEN);
-    payload[0] = 0x00;
-    payload[1] = 0x00;
+    payload[0] = secc_security; // TLS or TCP
+    printf("SENT PAYLOAD = %u\n", secc_security);
+    payload[1] = 0x00; // TCP = underlying protocol not matter what
     // Keep sending up to 50 multicast messages until cancelled
     while (i < SDP_MAX_TRIES && atomic_load(cancel) == 0) {
         printf("Broadcasting multicast message, try %d\n", i+1);
@@ -172,6 +175,7 @@ static ssize_t response_reader( void* args, atomic_int *cancel ){
     byte* payload = buf + SDP_HEADER_LEN;
     int err;
     ssize_t len;
+    byte expected_secc_security = rargs->secc_security;
     byte secc_security, secc_transport_protocol;
     while(atomic_load(cancel) == 0) {
         len = recv(rargs->sockfd, buf, SDP_HEADER_LEN+SDP_RESP_PAYLOAD_LEN, 0);
@@ -188,14 +192,14 @@ static ssize_t response_reader( void* args, atomic_int *cancel ){
             continue;
         }
         secc_security = payload[18];
-        if (SDP_ENFORCE_STRICT_SECURITY_REQUIREMENT
-            && secc_security != 0x00) {
-            printf("ev_sdp_resp_reader: evse does not support TLS, discarding\n");
+        printf("actual security: %u, expected security: %u\n", secc_security, expected_secc_security);
+        if (secc_security != expected_secc_security) {
+            printf("ev_sdp_resp_reader: evse does not support the chosen protocol, discarding\n");
             continue;
         }
         secc_transport_protocol = payload[19];
         if (secc_transport_protocol != 0x00) {
-            printf("ev_sdp_resp_reader: evse does not support TCP, discarding\n");
+            printf("ev_sdp_resp_reader: evse does not support TCP as underlying transport, discarding\n");
             continue;
         }
         break;
@@ -206,7 +210,7 @@ static ssize_t response_reader( void* args, atomic_int *cancel ){
     return 0;
 }
 
-int ev_sdp_discover_evse( char* if_name, struct sockaddr_in6* evse_addr )
+int ev_sdp_discover_evse( char* if_name, struct sockaddr_in6* evse_addr, bool tls_enabled )
 {
     int sock, err;
     ssize_t ret;
@@ -258,8 +262,10 @@ int ev_sdp_discover_evse( char* if_name, struct sockaddr_in6* evse_addr )
     fflush(stdout);
     rargs.sockfd = sock;
     rargs.addr = evse_addr;
+    rargs.secc_security = !tls_enabled;
     wargs.sockfd = sock;
     wargs.addr = &dest;
+    wargs.secc_security = !tls_enabled;
     iocall(iocr, &response_reader, &rargs, sizeof(ioargs));
     iocall(iocw, &request_writer, &wargs, sizeof(ioargs));
     // === Receive responses from iocalls ===
@@ -290,13 +296,13 @@ int ev_sdp_discover_evse( char* if_name, struct sockaddr_in6* evse_addr )
 //                  EVSE (server)
 //==================================================
 
-void evse_sdp_respond(char* if_name, struct sockaddr_in6 raddr, uint16_t tls_port)
+void evse_sdp_respond(char* if_name, struct sockaddr_in6 raddr, uint16_t port, byte secc_security)
 {
     byte buf[SDP_HEADER_LEN+SDP_RESP_PAYLOAD_LEN];
     ssize_t sentSz;
     byte* payload = buf + SDP_HEADER_LEN;
     struct sockaddr_in6 laddr;
-    uint16_t port_bigendian = htons( tls_port );
+    uint16_t port_bigendian = htons( port );
     // === Create ipv6 udp socket ===
     int sock = socket( AF_INET6, SOCK_DGRAM, IPPROTO_UDP );
     if (sock < 0) {
@@ -311,8 +317,8 @@ void evse_sdp_respond(char* if_name, struct sockaddr_in6 raddr, uint16_t tls_por
     write_header(buf, SDP_RESP_TYPE, SDP_RESP_PAYLOAD_LEN);
     memcpy(payload, laddr.sin6_addr.s6_addr, 16);
     memcpy(payload + 16, &port_bigendian, 2);
-    payload[18] = 0; // Signal TLS support
-    payload[19] = 0; // Set protocol to TCP
+    payload[18] = secc_security; // Signal 0x01 for TCP only or 0x00 for TLS
+    payload[19] = 0; // Set underlying protocol to TCP (no choice)
     // === Send sdp response packet ===
     print_byte_arr(raddr.sin6_addr.s6_addr, sizeof(struct sockaddr_in6));
     printf("======SEND\n");
@@ -325,10 +331,8 @@ void evse_sdp_respond(char* if_name, struct sockaddr_in6 raddr, uint16_t tls_por
     close(sock);
 }
 
-void evse_sdp_listen_discovery_msg( void* args )
+void sdp_listen(char* if_name, int tls_port, int tcp_port)
 {
-    char if_name[IFNAMSIZ];
-    uint16_t tls_port = ((struct evse_sdp_listen_args*)args)->tls_port;
     struct sockaddr_in6 laddr = {
         .sin6_family = AF_INET6,
         .sin6_addr = in6addr_any,
@@ -338,8 +342,6 @@ void evse_sdp_listen_discovery_msg( void* args )
     struct ipv6_mreq mreq;
     struct sockaddr_in6 raddr;
     size_t raddr_len = sizeof( raddr );
-    strcpy(if_name, ((struct evse_sdp_listen_args*)args)->if_name );
-    rendez(args, NULL);
     printf("start listen %s fjhjh\n", if_name);
     // === Get interface index ===
     unsigned int if_index = if_nametoindex(if_name);
@@ -376,6 +378,8 @@ void evse_sdp_listen_discovery_msg( void* args )
     printf("Receive SDP requests\n");
     for (;;) {
         byte buf[1024];
+        byte* payload = buf + SDP_HEADER_LEN;
+        byte secc_security;
         len = recvfrom(sock, buf, 1024, 0,
                        (struct sockaddr *)&raddr,
                        (socklen_t *)&raddr_len );
@@ -392,7 +396,13 @@ void evse_sdp_listen_discovery_msg( void* args )
             printf("evse_sdp_listen_discovery_msg: invalid header\n");
             continue;
         }
-        printf("start responding\n");
+        secc_security = payload[0];
+        printf("SECC security = %u\n", secc_security);
+        if (secc_security == 0x00) {
+            evse_sdp_respond(if_name, raddr, tls_port, 0x00);
+        } else if (secc_security == 0x01){
+            evse_sdp_respond(if_name, raddr, tcp_port, 0x01);
+        }
         /*data[len] = '\0';
         printf( "Received 0x%zu bytes: %s\n", len, data );
 
@@ -400,23 +410,12 @@ void evse_sdp_listen_discovery_msg( void* args )
         printf("Port: %d\n", ntohs( raddr.sin6_port ));*/
         // === Respond to SDP request ===
         // for( i = 0 ; i < 50 ; i ++ )
-        evse_sdp_respond(if_name, raddr, tls_port);
         // sleep( 250ms)
         // }
     }
     close(sock);
 }
 
-void sdp_listen(char* if_name, int tls_port) {
-    struct evse_sdp_listen_args sdp_args = {
-        .if_name = if_name,
-        .tls_port = tls_port,
-    };
-    printf("start listen %s\n", if_name);
-    threadcreate(evse_sdp_listen_discovery_msg, &sdp_args, 1024 * 1024);
-    rendez(&sdp_args, NULL);
-    printf("huehue\n");
-}
 
 /*
     mreq6.ipv6mr_multiaddr = ((SOCKADDR_IN6 *)resmulti->ai_addr)->sin6_addr;

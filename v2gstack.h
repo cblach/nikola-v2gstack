@@ -12,28 +12,38 @@
 //=============
 //    SDP
 //=============
-int ev_sdp_discover_evse( char* if_name, struct sockaddr_in6* evse_addr );
+int ev_sdp_discover_evse( char* if_name, struct sockaddr_in6* evse_addr, bool tls_enabled );
 //void evse_sdp_listen_discovery_msg( void* args );
-void sdp_listen(char* if_name, int tls_port);
+void sdp_listen(char* if_name, int tls_port, int tcp_port);
 //==============
 //    TLS
 //==============
 typedef uint8_t byte;
-int secc_listen_tls(int, int ( *handle_func )( struct v2gEXIDocument*,
-                                                struct v2gEXIDocument* ));
-int bind_tls();
+typedef int (*handle_func_t)( struct v2gEXIDocument*,
+                              struct v2gEXIDocument*);
+void secc_listen_tls(int, handle_func_t);
+void secc_listen_tcp(int, handle_func_t);
+int bind_v2gport();
 struct ev_blocking_request_t;
+
+// SECC connection Context that allows either for an fd or an ssl context
+typedef struct{
+    bool tls_enabled;
+    int sockfd;
+    ssl_context ssl;
+} comboconn_t;
 struct ev_tls_conn_t{
 	bool alive;
     struct sockaddr_in6 addr;
-    ssl_context ssl;
+    bool tls_enabled;
+    comboconn_t cconn; // Makes it possible for either TCP or TLS
     QLock mutex;
     Chan kill_chan;
     // The connection keeps a queue of waiting requests to respond in correct order.
     struct ev_blocking_request_t* first_req;
     struct ev_blocking_request_t* last_req;
 
-    // Stored here due to cleanup:
+    // TLS Only stuff Stored here due to cleanup:
     int serverfd;
     x509_crt cacert;
     entropy_context entropy;
@@ -44,6 +54,7 @@ int new_request( struct ev_tls_conn_t* conn, byte* buffer,
                  size_t request_len, size_t buffer_len );
 
 int evcc_connect_tls( struct ev_tls_conn_t* conn );
+int evcc_connect_tcp( struct ev_tls_conn_t* conn );
 
 int v2g_request( struct ev_tls_conn_t* conn, struct v2gEXIDocument* exiIn, struct v2gEXIDocument* exiOut);
 

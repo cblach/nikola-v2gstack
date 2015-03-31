@@ -8,7 +8,7 @@ TARGET=libnikolav2g.a
 SOURCES=\
     sdp.c\
     plc_eth.c\
-    tlsconn.c\
+    v2gconn.c\
     map.c\
     session.c\
 

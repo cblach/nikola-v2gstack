@@ -20,9 +20,9 @@
 
 #ifndef PLC_ETH_H
 #define PLC_ETH_H 1
-
+#ifndef byte
 typedef unsigned char byte;
-
+#endif
 static const size_t ETH_FRAME_HDR_SIZE = 14;
 static const size_t ETH_FRAME_MIN_PAYLOAD_SIZE = 46;
 static const size_t ETH_FRAME_MIN_SIZE = ETH_FRAME_HDR_SIZE + ETH_FRAME_MIN_PAYLOAD_SIZE;

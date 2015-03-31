@@ -6,10 +6,6 @@
 #include "v2gstack.h"
 //#include <net/if.h>
 #include "plc_eth.h"
-
-#include <execinfo.h>
-#include <signal.h>
-
 void ev_example(char* if_name);
 void evse_example(char* if_name);
 int slac_associate(char* if_name);

@@ -656,7 +656,7 @@ void ev_example(char* if_name)
     memset(&ev_session, 0, sizeof(v2g_ev_session));
     load_contract("certs/contract.key", &ev_session);
     int err;
-    if( ev_sdp_discover_evse( if_name, &conn.addr ) < 0 ){
+    if( ev_sdp_discover_evse( if_name, &conn.addr, true ) < 0 ){
         printf("main: ev_sdp_discover_evse error\n");
         return;
     }

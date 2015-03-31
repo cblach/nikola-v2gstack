@@ -60,7 +60,9 @@
 //===================================
 //             Typdefs
 //===================================
+#ifndef byte
 typedef uint8_t byte;
+#endif
 typedef unsigned long long uvlong;
 struct ev_blocking_request_t{
     Chan wake_chan;
@@ -134,13 +136,13 @@ void print_ssl_read_err( int err)
 
 static ssize_t iocall_sslreadn( void* args, atomic_int *cancel )
 {
-    ssln_arg* sargs = args;
+    ssln_arg* args = args;
     int bytes_read = 0;
     int tries = 0;
     int ret;
-    while (bytes_read < sargs->n && atomic_load(cancel) == 0) {
-        ret = ssl_read(sargs->ssl, sargs->buffer + bytes_read,
-                       sargs->n - bytes_read);
+    while (bytes_read < args->n && atomic_load(cancel) == 0) {
+        ret = ssl_read(args->ssl, args->buffer + bytes_read,
+                       args->n - bytes_read);
         if( ret == POLARSSL_ERR_NET_WANT_READ ||
             ret == POLARSSL_ERR_NET_WANT_WRITE ) {
             if (tries > 30) {
@@ -160,12 +162,12 @@ static ssize_t iocall_sslreadn( void* args, atomic_int *cancel )
 
 static ssize_t iocall_sslwriten( void* args, atomic_int *cancel )
 {
-    ssln_arg* sargs = args;
+    ssln_arg* args = args;
     int bytes_written = 0;
     int ret;
-    while (bytes_written < sargs->n && atomic_load(cancel) == 0) {
-        ret = ssl_write(sargs->ssl, sargs->buffer + bytes_written,
-                        sargs->n - bytes_written);
+    while (bytes_written < args->n && atomic_load(cancel) == 0) {
+        ret = ssl_write(args->ssl, args->buffer + bytes_written,
+                        args->n - bytes_written);
         if (ret < 1) {
             print_ssl_read_err(ret);
             return -1;
@@ -388,7 +390,7 @@ struct handletls_args_t{
 };
 
 // Bind the TLS listener to a dynamic port
-int bind_tls(uint16_t* port)
+int bind_v2gport(uint16_t* port)
 {
     int err;
     struct sockaddr_in6 bound_laddr;
@@ -654,6 +656,32 @@ void secc_handle_tls( void* arg )
     printf("closing connection to client\n");
 }
 
+int secc_listen_tcp(int sockfd,
+                    int ( *handle_func )( struct v2gEXIDocument*,
+                                          struct v2gEXIDocument* ))
+{
+    int sockfd;
+    for (;;) {
+        struct sockaddr_in6 raddr;
+        unsigned int raddr_len = sizeof( raddr);
+        // === Wait for a connection ===
+        sockfd = accept(sockfd, (struct sockaddr*) &raddr, &raddr_len);
+        if (args.fd < 0) {
+            perror("accept");
+            return -1;
+        }
+        printf("accepted connection\n");
+        err = threadcreate(secc_handle_tcp, &sockfd, 1024 * 1024);
+        if (err < 0) {
+            perror("threadcreate");
+            abort();
+        };
+        rendez(&args, NULL);
+
+    }
+
+}
+}
 // Listen for new connections
 int secc_listen_tls(int sockfd,
                     int ( *handle_func )( struct v2gEXIDocument*,
