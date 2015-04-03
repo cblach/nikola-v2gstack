@@ -21,7 +21,7 @@ void sdp_listen(char* if_name, int tls_port, int tcp_port);
 typedef uint8_t byte;
 typedef int (*handle_func_t)( struct v2gEXIDocument*,
                               struct v2gEXIDocument*);
-void secc_listen_tls(int, handle_func_t);
+void secc_listen_tls(int, handle_func_t, char* crt_path, char* key_path);
 void secc_listen_tcp(int, handle_func_t);
 int bind_v2gport();
 struct ev_blocking_request_t;
@@ -46,6 +46,7 @@ struct ev_tls_conn_t{
     // TLS Only stuff Stored here due to cleanup:
     int serverfd;
     x509_crt cacert;
+    pk_context pkey;
     entropy_context entropy;
     ctr_drbg_context ctr_drbg;
 };
@@ -53,7 +54,7 @@ struct ev_tls_conn_t{
 int new_request( struct ev_tls_conn_t* conn, byte* buffer,
                  size_t request_len, size_t buffer_len );
 
-int evcc_connect_tls( struct ev_tls_conn_t* conn );
+int evcc_connect_tls( struct ev_tls_conn_t* conn, char* crt_path, char* key_path );
 int evcc_connect_tcp( struct ev_tls_conn_t* conn );
 
 int v2g_request( struct ev_tls_conn_t* conn, struct v2gEXIDocument* exiIn, struct v2gEXIDocument* exiOut);

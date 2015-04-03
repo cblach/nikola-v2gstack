@@ -739,7 +739,7 @@ void evse_example(char* if_name)
     };
     threadcreate( evse_sdp_listen_discovery_msg, &sdp_args, 1024 * 1024);*/
 
-    secc_listen_tls( tls_sockfd, &create_response_message );
+    secc_listen_tls( tls_sockfd, &create_response_message, "certs/evse.crt", "certs/evse.key" );
     secc_listen_tcp( tcp_sockfd, &create_response_message );
     // Set port to 0 to disable tls or tcp
     // (always do sdp_listen after secc_listen_*)

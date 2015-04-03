@@ -6,7 +6,7 @@
 #include <unistd.h>
 #include <limits.h>
 #include "polarssl/ssl_cache.h"
-
+#include "polarssl/error.h"
 #include "appHandEXIDatatypes.h"
 #include "appHandEXIDatatypesEncoder.h"
 #include "appHandEXIDatatypesDecoder.h"
@@ -593,6 +593,8 @@ int secc_handle_request(comboconn_t* cconn, Chan* tc,
 typedef struct {
     int sockfd;
     handle_func_t handle_func;
+    char* crt_path;
+    char* key_path;
 } secc_listen_args_t;
 
 
@@ -766,10 +768,10 @@ void secc_listen_tls_child(void* vargs)
     handle_func_t handle_func = listen_args->handle_func;
     struct handletls_args_t handle_args;
     struct tls_global_params_t* tlsp;
-    rendez(vargs, NULL);
     tlsp = (struct tls_global_params_t*)malloc(sizeof(struct tls_global_params_t));
     if (tlsp == NULL) {
         perror("secc_listen_tls, malloc error\n");
+        rendez(vargs, NULL);
         return;
     }
     // === Init ===
@@ -779,6 +781,7 @@ void secc_listen_tls_child(void* vargs)
     err = entropy_gather(&tlsp->entropy);
     if (err != 0) {
         printf("secc_listen_tls, entropy gather error\n");
+        rendez(vargs, NULL);
         return ;
     }
     x509_crt_init(&tlsp->srvcert);
@@ -787,14 +790,17 @@ void secc_listen_tls_child(void* vargs)
     err = x509_crt_parse_file(&tlsp->srvcert, "certs/evse.crt");
     if (err != 0) {
         printf(" failed\n  !  x509_crt_parse returned %d\n\n", err);
+        rendez(vargs, NULL);
         return ;
     }
     err = pk_parse_keyfile( &tlsp->pkey, "certs/evse.key", NULL);
     if (err != 0) {
         printf(" failed\n  !  pk_parse_key returned %d\n\n", err);
+        rendez(vargs, NULL);
         return ;
     }
     handle_args.global = tlsp;
+    rendez(vargs, NULL);
     // === TLS listen loop ===
     printf("start TLS listen\n");
     for (;;) {
@@ -829,10 +835,13 @@ void secc_listen_tcp(int sockfd,
 }
 
 void secc_listen_tls(int sockfd,
-                     handle_func_t handle_func) {
+                     handle_func_t handle_func,
+                     char* crt_path, char* key_path) {
     secc_listen_args_t listen_args = {
         .sockfd = sockfd,
         .handle_func = handle_func,
+        .crt_path = crt_path,
+        .key_path = key_path,
     };
     threadcreate(secc_listen_tls_child, &listen_args, 1024 * 1024);
     rendez(&listen_args, NULL);
@@ -1118,6 +1127,7 @@ static void evcc_connect_stream_reader( void* arg )
     // === Free connection ===
     chanfree(&conn->kill_chan);
     x509_crt_free( &conn->cacert );
+    pk_free(&conn->pkey);
     ssl_free( &conn->cconn.ssl );
     ctr_drbg_free( &conn->ctr_drbg );
     entropy_free( &conn->entropy );
@@ -1180,7 +1190,8 @@ int evcc_connect_tcp( struct ev_tls_conn_t* conn )
     return -1;
 }
 
-int evcc_connect_tls( struct ev_tls_conn_t* conn )
+int evcc_connect_tls( struct ev_tls_conn_t* conn,
+                      char* crt_path, char* key_path )
 {
     int err = 0;
     const char *pers = "secc_ssl_client";
@@ -1195,6 +1206,7 @@ int evcc_connect_tls( struct ev_tls_conn_t* conn )
     // === Setup entropy ===
     entropy_init( &conn->entropy );
     x509_crt_init( &conn->cacert );
+    pk_init(&conn->pkey);
     memset( &conn->ctr_drbg, 0, sizeof( ctr_drbg_context ) );
     // === Setup random number generator for tls ===
     err = ctr_drbg_init( &conn->ctr_drbg, entropy_func, &conn->entropy,
@@ -1205,19 +1217,23 @@ int evcc_connect_tls( struct ev_tls_conn_t* conn )
         goto exit;
     }
     // === Parse certificate and .key file ===
-    err = x509_crt_parse_file( &conn->cacert, "certs/ev.crt" );
+    err = x509_crt_parse_file( &conn->cacert, crt_path );
     if( err != 0 ) {
-        printf( " failed\n  !  x509_crt_parse returned %d\n\n", err );
+        printf( " evcc_connect_tls: x509_crt_parse returned %d\n\n", err );
+        goto exit;
+    }
+    err = pk_parse_keyfile( &conn->pkey, key_path, NULL);
+    if (err != 0) {
+        printf("evcc_connect_tls: pk_parse_key returned %d\n\n", err);
         goto exit;
     }
     printf("\n");
     err = connect( conn->serverfd, (struct sockaddr*)&conn->addr,
                    sizeof( struct sockaddr_in6) );
     if( err != 0 ) {
-        perror("connect");
+        perror("evcc_connect_tls: connect\n");
         goto exit;
     }
-    printf("debug: connected\n");
     // === init ssl ==
     memset( &conn->cconn.ssl, 0, sizeof(ssl_context) );
     ssl_init( &conn->cconn.ssl );
@@ -1231,7 +1247,12 @@ int evcc_connect_tls( struct ev_tls_conn_t* conn )
         ssl_set_authmode( &conn->cconn.ssl, SSL_VERIFY_REQUIRED );
     }
     ssl_set_ciphersuites(&conn->cconn.ssl, V2G_CIPHER_SUITES);
-    ssl_set_ca_chain( &conn->cconn.ssl, &conn->cacert, NULL, "PolarSSL Server 1" );
+    ssl_set_ca_chain( &conn->cconn.ssl, &conn->cacert, NULL, "EVCC (client)" );
+    err = ssl_set_own_cert(&conn->cconn.ssl, &conn->cacert, &conn->pkey);
+    if (err != 0) {
+        printf( "evcc_connect_tls: ssl_set_own_cert returned %d\n\n", err );
+        goto exit;
+    }
     ssl_set_rng( &conn->cconn.ssl, ctr_drbg_random, &conn->ctr_drbg );
     ssl_set_dbg( &conn->cconn.ssl, my_debug, stdout );
     ssl_set_bio( &conn->cconn.ssl, net_recv, &conn->serverfd,
@@ -1241,13 +1262,13 @@ int evcc_connect_tls( struct ev_tls_conn_t* conn )
     {
         if( err != POLARSSL_ERR_NET_WANT_READ && err != POLARSSL_ERR_NET_WANT_WRITE )
         {
-            printf( " failed\n  ! ssl_handshake returned -0x%x\n\n", err );
+            printf( "evcc_connect_tls: ssl_handshake returned -0x%x\n\n", err );
             goto exit;
         }
     }
     // === Check certificate validity ===
     if( ( err = ssl_get_verify_result( &conn->cconn.ssl ) ) != 0 ) {
-        printf( " failed\n" );
+        printf( "evcc_connect_tls failed\n" );
 
         if( ( err & BADCERT_EXPIRED ) != 0 ) {
             printf( "  ! server certificate has expired\n" );

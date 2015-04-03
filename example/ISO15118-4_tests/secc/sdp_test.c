@@ -21,8 +21,6 @@
 #define SDP_REQ_PAYLOAD_LEN 2
 #define SDP_RESP_PAYLOAD_LEN 20
 #define SDP_SRV_PORT 15118
-#define SDP_SECURITY_TLS 0x00
-#define SDP_SECURITY_NONE 0x10
 #define SDP_MAX_TRIES 50
 #define SDP_TRY_DELAY 250ULL //ms
 typedef uint8_t byte;
@@ -129,7 +127,7 @@ int get_interface_ipv6_address( char* if_name,
 typedef struct{
     int sockfd;
     struct sockaddr_in6* addr;
-    byte security;
+    byte secc_security;
 } ioargs;
 
 // === Slave function for the SDP client ===
@@ -141,14 +139,15 @@ static ssize_t request_writer(void* args, atomic_int *cancel) {
     byte* payload = buf + SDP_HEADER_LEN;
     ssize_t sentsz;
     int i = 0;
-    byte security = wargs->security;
+    byte secc_security = wargs->secc_security;
     // === Set Multicast Data ===
     write_header(buf, SDP_REQ_TYPE, SDP_REQ_PAYLOAD_LEN);
-    payload[0] = security; // TLS or TCP
+    payload[0] = secc_security; // TLS or TCP
+    printf("SENT PAYLOAD = %u\n", secc_security);
     payload[1] = 0x00; // TCP = underlying protocol not matter what
     // Keep sending up to 50 multicast messages until cancelled
     while (i < SDP_MAX_TRIES && atomic_load(cancel) == 0) {
-        printf("Broadcasting SDP multicast request, try %d\n", i+1);
+        printf("Broadcasting multicast message, try %d\n", i+1);
         sentsz = sendto(wargs->sockfd, buf,
                         SDP_HEADER_LEN + SDP_REQ_PAYLOAD_LEN,
                         0, (struct sockaddr *)wargs->addr,
@@ -176,7 +175,7 @@ static ssize_t response_reader( void* args, atomic_int *cancel ){
     byte* payload = buf + SDP_HEADER_LEN;
     int err;
     ssize_t len;
-    byte expected_secc_security = rargs->security;
+    byte expected_secc_security = rargs->secc_security;
     byte secc_security, secc_transport_protocol;
     while(atomic_load(cancel) == 0) {
         len = recv(rargs->sockfd, buf, SDP_HEADER_LEN+SDP_RESP_PAYLOAD_LEN, 0);
@@ -193,6 +192,7 @@ static ssize_t response_reader( void* args, atomic_int *cancel ){
             continue;
         }
         secc_security = payload[18];
+        printf("actual security: %u, expected security: %u\n", secc_security, expected_secc_security);
         if (secc_security != expected_secc_security) {
             printf("ev_sdp_resp_reader: evse does not support the chosen protocol, discarding\n");
             continue;
@@ -258,12 +258,14 @@ int ev_sdp_discover_evse( char* if_name, struct sockaddr_in6* evse_addr, bool tl
     dest.sin6_family = AF_INET6;
     dest.sin6_port   = htons(SDP_SRV_PORT);
     memcpy( &dest.sin6_addr.s6_addr, SDP_MULTICAST_ADDR, 16);
+    printf("Preparing to send\n");
+    fflush(stdout);
     rargs.sockfd = sock;
     rargs.addr = evse_addr;
-    rargs.security = tls_enabled ? SDP_SECURITY_TLS : SDP_SECURITY_NONE;
+    rargs.secc_security = !tls_enabled;
     wargs.sockfd = sock;
     wargs.addr = &dest;
-    wargs.security = tls_enabled ? SDP_SECURITY_TLS : SDP_SECURITY_NONE;
+    wargs.secc_security = !tls_enabled;
     iocall(iocr, &response_reader, &rargs, sizeof(ioargs));
     iocall(iocw, &request_writer, &wargs, sizeof(ioargs));
     // === Receive responses from iocalls ===
@@ -282,6 +284,8 @@ int ev_sdp_discover_evse( char* if_name, struct sockaddr_in6* evse_addr, bool tl
             printf("critical ev_sdp_discover_evse: alt error\n");
             abort();
     }
+
+    printf("done, returning with %d\n", err);
     chanfree(iocr);
     chanfree(iocw);
     close(sock);
@@ -375,7 +379,7 @@ void sdp_listen(char* if_name, int tls_port, int tcp_port)
     for (;;) {
         byte buf[1024];
         byte* payload = buf + SDP_HEADER_LEN;
-        byte evcc_security;
+        byte secc_security;
         len = recvfrom(sock, buf, 1024, 0,
                        (struct sockaddr *)&raddr,
                        (socklen_t *)&raddr_len );
@@ -392,12 +396,12 @@ void sdp_listen(char* if_name, int tls_port, int tcp_port)
             printf("evse_sdp_listen_discovery_msg: invalid header\n");
             continue;
         }
-        evcc_security = payload[0];
-        printf("SECC security = 0x%0x\n", evcc_security);
-        if (evcc_security == SDP_SECURITY_TLS && tls_port > 0) {
-            evse_sdp_respond(if_name, raddr, tls_port, SDP_SECURITY_TLS);
-        } else if (tcp_port > 0){
-            evse_sdp_respond(if_name, raddr, tcp_port, SDP_SECURITY_NONE);
+        secc_security = payload[0];
+        printf("SECC security = %u\n", secc_security);
+        if (secc_security == 0x00) {
+            evse_sdp_respond(if_name, raddr, tls_port, 0x00);
+        } else if (secc_security == 0x01){
+            evse_sdp_respond(if_name, raddr, tcp_port, 0x01);
         }
         /*data[len] = '\0';
         printf( "Received 0x%zu bytes: %s\n", len, data );
