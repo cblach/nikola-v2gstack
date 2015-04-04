@@ -15,6 +15,12 @@ const v2gEnergyTransferModeType ENERGY_TRANSFER_MODES[] =
 	v2gEnergyTransferModeType_AC_three_phase_core,
 };
 
+x509_crt Trusted_contract_rootcert_chain;
+
+//==============================
+//      Utility Functions
+//==============================
+
 void init_v2g_response(struct v2gEXIDocument* exiIn, session_t* session)
 {
     init_v2gEXIDocument(exiIn);
@@ -278,7 +284,8 @@ static int handle_payment_detail(struct v2gEXIDocument* exiIn,
 {
     struct v2gPaymentDetailsReqType* req = &exiIn->V2G_Message.Body.PaymentDetailsReq;
     struct v2gPaymentDetailsResType* res = &exiOut->V2G_Message.Body.PaymentDetailsRes;
-    int err;
+    int err, flags;
+    unsigned int i;
     init_v2g_response(exiOut, session);
 	exiOut->V2G_Message_isUsed = 1u;
 	exiOut->V2G_Message.Body.PaymentDetailsRes_isUsed = 1u;
@@ -288,6 +295,7 @@ static int handle_payment_detail(struct v2gEXIDocument* exiIn,
         printf("handle_payment_detail: unknown session\n");
         return 0;
     }
+    // === For the contract certificate, the certificate chain should be checked ===
     if (session->payment_type == v2gpaymentOptionType_Contract) {
         err = x509_crt_parse(&session->contract.crt,
                              req->ContractSignatureCertChain.Certificate.bytes,
@@ -298,13 +306,55 @@ static int handle_payment_detail(struct v2gEXIDocument* exiIn,
             printf("handle_payment_detail: invalid certififcate received in req\n");
             return 0;
         }
+        if (req->ContractSignatureCertChain.SubCertificates_isUsed) {
+            for (i = 0; i < req->ContractSignatureCertChain.SubCertificates.Certificate.arrayLen; i++) {
+//	printf("%s\n %u %u\n", req->ContractSignatureCertChain.SubCertificates.Certificate.array[0].bytes, req->ContractSignatureCertChain.SubCertificates.Certificate.array[i].bytesLen, req->ContractSignatureCertChain.SubCertificates.Certificate.arrayLen);
+                err = x509_crt_parse(&session->contract.crt,
+                                     req->ContractSignatureCertChain.SubCertificates.Certificate.array[i].bytes,
+                                     req->ContractSignatureCertChain.SubCertificates.Certificate.array[i].bytesLen);
+                if (err != 0) {
+                    memset(res, 0, sizeof(*res));
+                    res->ResponseCode = v2gresponseCodeType_FAILED_CertChainError;
+                    printf("handle_payment_detail: invalid subcertififcate received in req\n");
+                    return 0;
+                }
+
+            }
+        }
+        // Convert the public key in the certificate to an mbed TLS ECDSA public key
+        // This also verifies that it's an ECDSA key and not an RSA key
         err = ecdsa_from_keypair(&session->contract.pubkey, pk_ec(session->contract.crt.pk));
         if (err != 0) {
             memset(res, 0, sizeof(*res));
             res->ResponseCode = v2gresponseCodeType_FAILED_CertChainError;
             char strerr[256];
             error_strerror( err, strerr, 256 );
-            printf("handle_payment_detail: could not retrieve ecdsa from keypair: %s\n", strerr);
+            printf("handle_payment_detail: could not retrieve ecdsa public key from certificate keypair: %s\n", strerr);
+            return 0;
+        }
+        // === Verify the retrieved contract ECDSA key against the root cert ===
+        err = x509_crt_verify(&session->contract.crt, &Trusted_contract_rootcert_chain,
+                              NULL, NULL, &flags, NULL, NULL);
+        if (err != 0) {
+            printf("handle_payment_detail: contract certificate verify problem, ");
+            if( err == POLARSSL_ERR_X509_CERT_VERIFY_FAILED ) {
+                if (flags & BADCERT_CN_MISMATCH )
+                    printf("CN_MISMATCH\n");
+                if (flags & BADCERT_EXPIRED)
+                    printf("EXPIRED\n");
+                if (flags & BADCERT_REVOKED)
+                    printf("REVOKED\n");
+                if (flags & BADCERT_NOT_TRUSTED)
+                    printf("NOT_TRUSTED\n");
+                if (flags & BADCRL_NOT_TRUSTED)
+                    printf("CRL_NOT_TRUSTED\n");
+                if (flags & BADCRL_EXPIRED)
+                    printf("CRL_EXPIRED\n");
+            } else {
+                printf( " failed\n  !  x509_crt_verify returned %d\n", err );
+            }
+            memset(res, 0, sizeof(*res));
+            res->ResponseCode = v2gresponseCodeType_FAILED_CertChainError;
             return 0;
         }
         gen_random_data(session->challenge, 16);
@@ -720,6 +770,17 @@ static int create_response_message(struct v2gEXIDocument* exiIn, struct v2gEXIDo
 void evse_example(char* if_name)
 {
     int tls_port, tcp_port, tls_sockfd, tcp_sockfd;
+
+    // Init the contract root certificates
+    int err = x509_crt_parse_path(&Trusted_contract_rootcert_chain,
+                                  "certs/root/mobilityop/certs/");
+    if (err != 0) {
+        printf("evse_example: Unable to load contract root certificates\n");
+        char strerr[256];
+        error_strerror( err, strerr, 256 );
+        printf("err = %s\n", strerr);
+        return;
+    }
     init_sessions();
     // === Bind to dynamic port ===
     tls_sockfd = bind_v2gport(&tls_port);
@@ -739,7 +800,7 @@ void evse_example(char* if_name)
     };
     threadcreate( evse_sdp_listen_discovery_msg, &sdp_args, 1024 * 1024);*/
 
-    secc_listen_tls( tls_sockfd, &create_response_message, "certs/evse.crt", "certs/evse.key" );
+    secc_listen_tls( tls_sockfd, &create_response_message, "certs/evse.pem", "certs/evse.key" );
     secc_listen_tcp( tcp_sockfd, &create_response_message );
     // Set port to 0 to disable tls or tcp
     // (always do sdp_listen after secc_listen_*)

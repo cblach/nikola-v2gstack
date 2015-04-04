@@ -76,8 +76,8 @@ typedef struct{
     bool verified;
     struct{
         bool valid_crt; // Before a contract can be valid, it must have a valid crt
-        byte cert[v2gCertificateChainType_Certificate_BYTES_SIZE];
-        size_t cert_len;
+        //byte cert[v2gCertificateChainType_Certificate_BYTES_SIZE];
+        //size_t cert_len;
         x509_crt crt;
         ecdsa_context pubkey;
     } contract;

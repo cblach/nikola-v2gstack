@@ -66,7 +66,7 @@ threadmain( int argc,
     printf("Test %d: TLS serving & 15118 Protocol Handshake\n", ++n);
     if (USE_TLS && secc_tlsaddr.sin6_port != 0) {
         memcpy(&conn.addr, &secc_tlsaddr, sizeof(conn.addr));
-        err = evcc_connect_tls(&conn, "../certs/ev.crt", "../certs/ev.key");
+        err = evcc_connect_tls(&conn, "../certs/ev.pem", "../certs/ev.key");
     } else if (!USE_TLS && secc_tlsaddr.sin6_port != 0){
         memcpy(&conn.addr, &secc_tcpaddr, sizeof(conn.addr));
         err = evcc_connect_tcp(&conn);

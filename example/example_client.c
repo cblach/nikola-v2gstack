@@ -26,6 +26,8 @@ typedef struct ev_session{
     struct{
         byte cert[v2gCertificateChainType_Certificate_BYTES_SIZE];
         size_t cert_len;
+        byte sub_certs[v2gSubCertificatesType_Certificate_ARRAY_SIZE][v2gCertificateChainType_Certificate_BYTES_SIZE];
+        size_t subcert_len[v2gSubCertificatesType_Certificate_ARRAY_SIZE];
         ecdsa_context key;
         entropy_context entropy;
         ctr_drbg_context ctr_drbg;
@@ -36,11 +38,11 @@ typedef struct ev_session{
 //            Utility Functions
 //=========================================
 
-int read_file( char* path, void* buf, size_t buf_len)
+ssize_t read_file( char* path, void* buf, size_t buf_len)
 {
     int fd;
     ssize_t len;
-    size_t n = 0;
+    ssize_t n = 0;
     fd = open(path, O_RDONLY);
     if (fd < 0){
         return -1;
@@ -58,13 +60,14 @@ int read_file( char* path, void* buf, size_t buf_len)
         }
         n += len;
     }
+    printf("File too long for buffer. Must be smaller than %zd bytes\n", buf_len);
     close(fd);
     return -1;
 }
 
 int load_contract(char* keyfile_path, ev_session_t* ev_session) {
     int err;
-    size_t n;
+    ssize_t n;
     pk_context pk;
     pk_init(&pk);
     const char *pers = "ecdsa";
@@ -80,12 +83,18 @@ int load_contract(char* keyfile_path, ev_session_t* ev_session) {
         printf("could not retrieve ecdsa from keypair at %s\n",keyfile_path);
         return -1;
     }
-    n = read_file("certs/contract.crt", &ev_session->contract.cert, v2gCertificateChainType_Certificate_BYTES_SIZE);
+    n = read_file("certs/contract.pem", &ev_session->contract.cert, v2gCertificateChainType_Certificate_BYTES_SIZE);
     if (n <= 0) {
         printf("load_contract read file error\n");
         return -1;
     }
     ev_session->contract.cert_len = n;
+    n = read_file("certs/root/mobilityop/certs/mobilityop.pem", &ev_session->contract.sub_certs[0], v2gCertificateChainType_Certificate_BYTES_SIZE);
+    if (n <= 0) {
+        printf("load_contract read file error\n");
+        return -1;
+    }
+    ev_session->contract.subcert_len[0] = n;
     entropy_init( &ev_session->contract.entropy );
     if( ( err = ctr_drbg_init( &ev_session->contract.ctr_drbg, entropy_func, &ev_session->contract.entropy,
                                (const unsigned char *) pers,
@@ -366,16 +375,21 @@ int payment_details_request(struct ev_tls_conn_t* conn, ev_session_t* ev_session
 	req->eMAID.characters[0] = 1;
 	req->eMAID.characters[1] = 123;
 	req->eMAID.charactersLen = 2;
-
     memcpy(req->ContractSignatureCertChain.Certificate.bytes, ev_session->contract.cert, ev_session->contract.cert_len);
 	req->ContractSignatureCertChain.Certificate.bytesLen = ev_session->contract.cert_len;
-	req->ContractSignatureCertChain.SubCertificates_isUsed = 0;
+
+
+	req->ContractSignatureCertChain.SubCertificates_isUsed = 1u;
+	memcpy(req->ContractSignatureCertChain.SubCertificates.Certificate.array[0].bytes, ev_session->contract.sub_certs[0], ev_session->contract.subcert_len[0]);
+    req->ContractSignatureCertChain.SubCertificates.Certificate.array[0].bytesLen = ev_session->contract.subcert_len[0];
+    req->ContractSignatureCertChain.SubCertificates.Certificate.arrayLen = 1;
     exiIn.V2G_Message.Body.PaymentDetailsReq.ContractSignatureCertChain.Id_isUsed = 0;
 	err = v2g_request(conn, &exiIn, &exiOut);
     if (err != 0) {
         printf("unable to do payment_details_request v2g_request, exiting\n");
         return -1;
     }
+    printf("v2g request\n");
     // === Validate response type ===
     if (exiOut.V2G_Message.Body.PaymentDetailsRes_isUsed != 1u) {
         printf("payment_details_request: wrong response type\n");
@@ -654,14 +668,19 @@ void ev_example(char* if_name)
     ev_session_t ev_session;
     memset(&conn, 0, sizeof(struct ev_tls_conn_t));
     memset(&ev_session, 0, sizeof(ev_session_t));
-    load_contract("certs/contract.key", &ev_session);
     int err;
+    err = load_contract("certs/contract.key", &ev_session);
+    if( err != 0 ){
+        printf("ev_example: load_contract error\n");
+        return;
+    }
     if( ev_sdp_discover_evse( if_name, &conn.addr, true ) < 0 ){
-        printf("main: ev_sdp_discover_evse error\n");
+        printf("ev_example: ev_sdp_discover_evse error\n");
         return;
     }
     printf("connecting to secc\n");
-    err = evcc_connect_tls(&conn, "certs/ev.crt", "certs/ev.key");
+    err = evcc_connect_tls(&conn, "certs/ev.pem", "certs/ev.key");
+   //err = evcc_connect_tcp(&conn);
     if( err != 0 ){
         printf("main: evcc_connect_tls error\n");
         return;

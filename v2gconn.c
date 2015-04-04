@@ -134,7 +134,6 @@ void print_ssl_read_err( int err)
 //======================================
 //            SSL IO functions
 //======================================
-
 static ssize_t iocall_sslreadn( void* vargs, atomic_int *cancel )
 {
     ssln_arg* args = vargs;
@@ -177,6 +176,7 @@ static ssize_t iocall_sslwriten( void* vargs, atomic_int *cancel )
     }
     return 0;
 }
+
 
 static int sslreadn( ssl_context *ssl, byte* buffer,
                        unsigned int n, Chan* tc ) {
@@ -530,7 +530,7 @@ int handle_handshake( comboconn_t* cconn, Chan* tc )
 int secc_handle_request(comboconn_t* cconn, Chan* tc,
                         handle_func_t handle_func )
 {
-    unsigned char buf[1024];
+    unsigned char buf[BUFFER_SIZE];
     uint16_t payload_len;
     uint16_t buffer_pos = 0;
     bitstream_t stream = {
@@ -553,7 +553,7 @@ int secc_handle_request(comboconn_t* cconn, Chan* tc,
         return -1;
     }
     if (payload_len + V2GTP_HEADER_LENGTH > BUFFER_SIZE) {
-        printf("secc_handle_tls error: Buffer too small for request\n");
+        printf("secc_handle_request error: Buffer too small for request\n");
         return -1;
     }
     err = comboreadn(cconn, buf + V2GTP_HEADER_LENGTH, payload_len, tc);
@@ -611,13 +611,13 @@ void secc_handle_tcp( void* vargs )
     rendez(vargs, NULL);
     err = tchaninit(&tc);
     if (err != 0) {
-        printf("secc_handle_tls: tchaninit error\n");
+        printf("secc_handle_tcp: tchaninit error\n");
         goto exit;
     }
     tchanset(&tc, (uvlong)V2G_SECC_Sequence_Timeout * TIME_SECOND);
     err = handle_handshake( &cconn, &tc );
     if (err != 0) {
-        printf("secc_handle_tls error: handle_handshake");
+        printf("secc_handle_tcp error: handle_handshake");
         goto exit;
     }
     for(;;) {
@@ -787,13 +787,13 @@ void secc_listen_tls_child(void* vargs)
     x509_crt_init(&tlsp->srvcert);
     pk_init(&tlsp->pkey);
     // === Parse certificate and .key file ===
-    err = x509_crt_parse_file(&tlsp->srvcert, "certs/evse.crt");
+    err = x509_crt_parse_file(&tlsp->srvcert, listen_args->crt_path);
     if (err != 0) {
         printf(" failed\n  !  x509_crt_parse returned %d\n\n", err);
         rendez(vargs, NULL);
         return ;
     }
-    err = pk_parse_keyfile( &tlsp->pkey, "certs/evse.key", NULL);
+    err = pk_parse_keyfile( &tlsp->pkey, listen_args->key_path, NULL);
     if (err != 0) {
         printf(" failed\n  !  pk_parse_key returned %d\n\n", err);
         rendez(vargs, NULL);
@@ -1158,7 +1158,7 @@ int evcc_connect_tcp( struct ev_tls_conn_t* conn )
     int err = 0;
     err = init_evcc_conn(conn, false);
     if (err != 0) {
-        printf("evcc_connect_tls: init_evcc_conn\n");
+        printf("evcc_connect_tcp: init_evcc_conn\n");
         return -1;
     }
     // === Init ===
@@ -1227,7 +1227,6 @@ int evcc_connect_tls( struct ev_tls_conn_t* conn,
         printf("evcc_connect_tls: pk_parse_key returned %d\n\n", err);
         goto exit;
     }
-    printf("\n");
     err = connect( conn->serverfd, (struct sockaddr*)&conn->addr,
                    sizeof( struct sockaddr_in6) );
     if( err != 0 ) {
@@ -1287,6 +1286,7 @@ int evcc_connect_tls( struct ev_tls_conn_t* conn,
         printf( " ok\n" );
     }
 	conn->alive = true;
+	    printf("init mutex\n");
     memset(&conn->mutex, 0, sizeof(conn->mutex));
     err = threadcreate( evcc_connect_stream_reader, conn, 1024 * 1024 );
     if( err != 0 ){
