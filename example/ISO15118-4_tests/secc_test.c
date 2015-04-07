@@ -10,9 +10,10 @@
 int testnumber = 0, succeses = 0;
 
 bool USE_TLS = true;
-char V2G_Network_Interface[IFNAMSIZ] = "eth0";
+const char V2G_Network_Interface[IFNAMSIZ] = "eth0";
 
-void parseFlags( int argc, char **argv ){
+void parseFlags(int argc, char **argv)
+{
     int opt;
     while ((opt = getopt(argc, argv, "i:t:v")) != -1) {
         switch (opt) {
@@ -42,7 +43,8 @@ void parseFlags( int argc, char **argv ){
     }
 }
 
-void test_validate_port(struct sockaddr_in6* addr){
+void test_validate_port(struct sockaddr_in6 *addr)
+{
     if (addr->sin6_port == 0) {
         printf("Test Failed\n");
     } else {
@@ -53,9 +55,8 @@ void test_validate_port(struct sockaddr_in6* addr){
 
 
 int chattyv2g = 0;
-void
-threadmain( int argc,
-       char *argv[] )
+void threadmain(int argc,
+       char *argv[])
 {
     struct ev_tls_conn_t conn;
     ev_session_t ev_session;
@@ -72,7 +73,7 @@ threadmain( int argc,
     }
     printf("Test %d: SDP with TLS disabled (Security = 0x10... ", ++n);
     err = ev_sdp_discover_evse(V2G_Network_Interface, &secc_tcpaddr, false);
-    if (err != 0){
+    if (err != 0) {
         printf("Test Failed\n");
     } else {
         test_validate_port(&secc_tcpaddr);
@@ -82,14 +83,14 @@ threadmain( int argc,
     if (USE_TLS && secc_tlsaddr.sin6_port != 0) {
         memcpy(&conn.addr, &secc_tlsaddr, sizeof(conn.addr));
         err = evcc_connect_tls(&conn, "../certs/ev.pem", "../certs/ev.key");
-    } else if (!USE_TLS && secc_tlsaddr.sin6_port != 0){
+    } else if (!USE_TLS && secc_tlsaddr.sin6_port != 0) {
         memcpy(&conn.addr, &secc_tcpaddr, sizeof(conn.addr));
         err = evcc_connect_tcp(&conn);
     } else {
         printf("Unable to proceed as SDP found no viable port for chosen security\n");
         goto exit;
     }
-    if( err != 0 ){
+    if (err != 0) {
         printf("Connect failed, unable to proceed\n");
         goto exit;
     }

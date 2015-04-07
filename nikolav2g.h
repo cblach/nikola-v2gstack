@@ -15,15 +15,16 @@ extern int chattyv2g;
 //=============
 //    SDP
 //=============
-int ev_sdp_discover_evse( char* if_name, struct sockaddr_in6* evse_addr, bool tls_enabled );
-//void evse_sdp_listen_discovery_msg( void* args );
-void sdp_listen(char* if_name, int tls_port, int tcp_port);
+int ev_sdp_discover_evse(const char *if_name,
+                         struct sockaddr_in6 *evse_addr,
+                         bool tls_enabled);
+void sdp_listen(const char *if_name, int tls_port, int tcp_port);
 //==============
 //    TLS
 //==============
-typedef int (*handle_func_t)( struct v2gEXIDocument*,
-                              struct v2gEXIDocument*);
-void secc_listen_tls(int, handle_func_t, char* crt_path, char* key_path);
+typedef int (*handle_func_t)(struct v2gEXIDocument*,
+                             struct v2gEXIDocument*);
+void secc_listen_tls(int, handle_func_t, const char *crt_path, const char *key_path);
 void secc_listen_tcp(int, handle_func_t);
 int bind_v2gport();
 struct ev_blocking_request_t;
@@ -42,8 +43,8 @@ struct ev_tls_conn_t{
     QLock mutex;
     Chan kill_chan;
     // The connection keeps a queue of waiting requests to respond in correct order.
-    struct ev_blocking_request_t* first_req;
-    struct ev_blocking_request_t* last_req;
+    struct ev_blocking_request_t *first_req;
+    struct ev_blocking_request_t *last_req;
 
     // TLS Only stuff Stored here due to cleanup:
     int serverfd;
@@ -53,10 +54,10 @@ struct ev_tls_conn_t{
     ctr_drbg_context ctr_drbg;
 };
 
-int evcc_connect_tls( struct ev_tls_conn_t* conn, char* crt_path, char* key_path );
-int evcc_connect_tcp( struct ev_tls_conn_t* conn );
+int evcc_connect_tls(struct ev_tls_conn_t *conn, const char *crt_path, const char *key_path);
+int evcc_connect_tcp(struct ev_tls_conn_t *conn);
 
-int v2g_request( struct ev_tls_conn_t* conn, struct v2gEXIDocument* exiIn, struct v2gEXIDocument* exiOut);
+int v2g_request(struct ev_tls_conn_t *conn, struct v2gEXIDocument *exiIn, struct v2gEXIDocument *exiOut);
 
 
 //==================
@@ -88,14 +89,14 @@ typedef struct{
     enum session_status status;
 }session_t;
 
-int gen_random_data(void* dest, size_t dest_len);
+int gen_random_data(void *dest, size_t dest_len);
 int init_sessions();
-session_t* session_new();
-session_t* session_lookup( uint64_t sessionid );
-session_t* session_lookup_exi(struct v2gEXIDocument* exiIn);
-void session_lock(session_t* session);
-void session_unlock(session_t* session);
-void session_terminate( session_t* session );
-void session_remove_ref(session_t* session);
+session_t *session_new();
+session_t *session_lookup(uint64_t sessionid);
+session_t *session_lookup_exi(struct v2gEXIDocument *exiIn);
+void session_lock(session_t *session);
+void session_unlock(session_t *session);
+void session_terminate(session_t *session);
+void session_remove_ref(session_t *session);
 
 #endif

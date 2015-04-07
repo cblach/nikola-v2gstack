@@ -32,24 +32,20 @@ struct Map
     size_t elemsz;
     size_t nbuckets;
     Bucket **buckets;
-
     size_t (*hash)(Key);
     int (*cmp)(Key, Key);
 };
 
-int
-mapinit( Map *map,
-         size_t elemsz,
-         size_t nbuckets,
-         size_t (*hash)(Key),
-         int (*cmp)(Key, Key) );
-void *
-mapinsert( Map *map,
-           Key k );
-void* mapfind( Map *map,
-         Key k );
-void
-mapremove( Map *map,
-           Key k );
+int mapinit(Map *map,
+        size_t elemsz,
+        size_t nbuckets,
+        size_t (*hash)(Key),
+        int (*cmp)(Key, Key));
+void *mapinsert(Map *map,
+          Key k);
+void *mapfind(Map *map,
+              Key k);
+void mapremove(Map *map,
+          Key k);
 
 #endif

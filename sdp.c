@@ -29,20 +29,20 @@
 typedef uint8_t byte;
 
 #define TIME_MICROSECOND 1000
-#define TIME_MILLISECOND ( TIME_MICROSECOND * 1000 )
-#define TIME_SECOND ( TIME_MILLISECOND * 1000 )
+#define TIME_MILLISECOND (TIME_MICROSECOND * 1000)
+#define TIME_SECOND (TIME_MILLISECOND * 1000)
 // ff::1
 static const uint8_t SDP_MULTICAST_ADDR[16] = {0xff, 0x02, 0, 0,
                                                0, 0, 0, 0,
                                                0, 0, 0, 0,
                                                0, 0, 0, 1};
 struct evse_sdp_listen_args{
-    char* if_name;
+    char *if_name;
     uint16_t tls_port;
 };
 typedef unsigned long long uvlong;
 
-static inline uvlong nsleep( uvlong ns )
+static inline uvlong nsleep(uvlong ns)
 {
     struct timespec left, ts = { .tv_sec = ns / TIME_SECOND, .tv_nsec = ns % TIME_SECOND };
     int r = nanosleep(&ts, &left);
@@ -50,20 +50,20 @@ static inline uvlong nsleep( uvlong ns )
     return (r == 0) ? 0 : ((uvlong)left.tv_sec * TIME_SECOND + (uvlong)ts.tv_nsec);
 }
 
-static void print_byte_arr( byte* arr, size_t n )
+static void print_byte_arr(byte *arr, size_t n)
 {
     int i;
     if (chattyv2g) fprintf(stderr, "[");
     // Highly ineffictive but whatever it's TESTING!! :D
-    for( i = 0; i < n; i++) {
-        if (chattyv2g) fprintf(stderr,  " %02x", arr[i] );
+    for (i = 0; i < n; i++) {
+        if (chattyv2g) fprintf(stderr, " %02x", arr[i]);
     }
     if (chattyv2g) fprintf(stderr, " ]\n");
 }
 
-static void write_header( byte* buf,
-                       uint16_t payload_type,
-                       uint32_t payload_len )
+static void write_header(byte *buf,
+                         uint16_t payload_type,
+                         uint32_t payload_len)
 {
     buf[0] = SDP_VERSION; // Version
     buf[1] = SDP_INVERSE_VERSION; // Inverse version
@@ -75,8 +75,8 @@ static void write_header( byte* buf,
     buf[7] = payload_len & 0xff; // Payload length part 4 (LSB)
 }
 
-static int validate_header(byte* buf, uint16_t expected_payload_type,
-                    uint32_t expected_payload_len){
+static int validate_header(byte *buf, uint16_t expected_payload_type,
+                    uint32_t expected_payload_len) {
     uint16_t payload_type;
     uint32_t payload_len;
     if (buf[0] != SDP_VERSION) {
@@ -100,8 +100,8 @@ static int validate_header(byte* buf, uint16_t expected_payload_type,
     return 0;
 }
 
-int get_interface_ipv6_address( char* if_name,
-                                    struct sockaddr_in6* addr  )
+int get_interface_ipv6_address(const char *if_name,
+                                  struct sockaddr_in6 *addr)
 {
     struct ifaddrs *ifa, *ifa_o;
     int err = getifaddrs(&ifa);
@@ -113,8 +113,8 @@ int get_interface_ipv6_address( char* if_name,
     // ===    find the corresponding address     ===
     for (; ifa != NULL; ifa = ifa->ifa_next) {
         if (ifa->ifa_addr != NULL && ifa->ifa_addr->sa_family == AF_INET6
-            && strcmp( ifa->ifa_name, if_name ) == 0) {
-            memcpy( addr, (struct sockaddr_in6 *)(ifa->ifa_addr), sizeof(struct sockaddr_in6));
+            && strcmp(ifa->ifa_name, if_name) == 0) {
+            memcpy(addr, (struct sockaddr_in6 *)(ifa->ifa_addr), sizeof(struct sockaddr_in6));
             freeifaddrs(ifa_o);
             return 0;
         }
@@ -129,17 +129,17 @@ int get_interface_ipv6_address( char* if_name,
 
 typedef struct{
     int sockfd;
-    struct sockaddr_in6* addr;
+    struct sockaddr_in6 *addr;
     byte security;
 } ioargs;
 
 // === Slave function for the SDP client ===
 // === Attempts to send the SDP message SDP_MAX_TRIES (50) times
 // === using the multicast address provided on the provided socket===
-static ssize_t request_writer(void* args, atomic_int *cancel) {
-    ioargs* wargs = args;
+static ssize_t request_writer(void *args, atomic_int *cancel) {
+    ioargs *wargs = args;
     byte buf[SDP_HEADER_LEN+SDP_REQ_PAYLOAD_LEN];
-    byte* payload = buf + SDP_HEADER_LEN;
+    byte *payload = buf + SDP_HEADER_LEN;
     ssize_t sentsz;
     int i = 0;
     byte security = wargs->security;
@@ -171,10 +171,11 @@ static ssize_t request_writer(void* args, atomic_int *cancel) {
 
 // === Second slave function to the SDP client ===
 // === Attempts to read unicast responses from an SDP server ===
-static ssize_t response_reader( void* args, atomic_int *cancel ){
-    ioargs* rargs = args;
+static ssize_t response_reader(void *args, atomic_int *cancel)
+{
+    ioargs *rargs = args;
     byte buf[512];
-    byte* payload = buf + SDP_HEADER_LEN;
+    byte *payload = buf + SDP_HEADER_LEN;
     int err;
     ssize_t len;
     byte expected_secc_security = rargs->security;
@@ -206,12 +207,14 @@ static ssize_t response_reader( void* args, atomic_int *cancel ){
         break;
     }
     memcpy(rargs->addr->sin6_addr.s6_addr, payload, 16);
-    memcpy(&rargs->addr->sin6_port, payload + 16, 2 );
+    memcpy(&rargs->addr->sin6_port, payload + 16, 2);
     if (chattyv2g) fprintf(stderr, "Succesful SDP response from EVSE\n");
     return 0;
 }
 
-int ev_sdp_discover_evse( char* if_name, struct sockaddr_in6* evse_addr, bool tls_enabled )
+int ev_sdp_discover_evse(const char *if_name,
+                         struct sockaddr_in6 *evse_addr,
+                         bool tls_enabled)
 {
     int sock, err;
     ssize_t ret;
@@ -258,7 +261,7 @@ int ev_sdp_discover_evse( char* if_name, struct sockaddr_in6* evse_addr, bool tl
     memset((char *)&dest, 0, sizeof(dest));
     dest.sin6_family = AF_INET6;
     dest.sin6_port   = htons(SDP_SRV_PORT);
-    memcpy( &dest.sin6_addr.s6_addr, SDP_MULTICAST_ADDR, 16);
+    memcpy(&dest.sin6_addr.s6_addr, SDP_MULTICAST_ADDR, 16);
     rargs.sockfd = sock;
     rargs.addr = evse_addr;
     rargs.security = tls_enabled ? SDP_SECURITY_TLS : SDP_SECURITY_NONE;
@@ -293,20 +296,21 @@ int ev_sdp_discover_evse( char* if_name, struct sockaddr_in6* evse_addr, bool tl
 //                  EVSE (server)
 //==================================================
 
-void evse_sdp_respond(char* if_name, struct sockaddr_in6 raddr, uint16_t port, byte secc_security)
+void evse_sdp_respond(const char *if_name, struct sockaddr_in6 raddr,
+                      uint16_t port, byte secc_security)
 {
     byte buf[SDP_HEADER_LEN+SDP_RESP_PAYLOAD_LEN];
     ssize_t sentSz;
-    byte* payload = buf + SDP_HEADER_LEN;
+    byte *payload = buf + SDP_HEADER_LEN;
     struct sockaddr_in6 laddr;
-    uint16_t port_bigendian = htons( port );
+    uint16_t port_bigendian = htons(port);
     // === Create ipv6 udp socket ===
-    int sock = socket( AF_INET6, SOCK_DGRAM, IPPROTO_UDP );
+    int sock = socket(AF_INET6, SOCK_DGRAM, IPPROTO_UDP);
     if (sock < 0) {
         if (chattyv2g) fprintf(stderr, "%s: %m\n", "socket");
         exit(-1);
     }
-    if (get_interface_ipv6_address(if_name, &laddr)){
+    if (get_interface_ipv6_address(if_name, &laddr)) {
         if (chattyv2g) fprintf(stderr, "%s: %m\n", "if_name_to_ipv6_addr");
         return;
     }
@@ -328,17 +332,17 @@ void evse_sdp_respond(char* if_name, struct sockaddr_in6 raddr, uint16_t port, b
     close(sock);
 }
 
-void sdp_listen(char* if_name, int tls_port, int tcp_port)
+void sdp_listen(const char *if_name, int tls_port, int tcp_port)
 {
     struct sockaddr_in6 laddr = {
         .sin6_family = AF_INET6,
         .sin6_addr = in6addr_any,
-        .sin6_port = htons( SDP_SRV_PORT),
+        .sin6_port = htons(SDP_SRV_PORT),
     };
     int sock, err, len;
     struct ipv6_mreq mreq;
     struct sockaddr_in6 raddr;
-    size_t raddr_len = sizeof( raddr );
+    size_t raddr_len = sizeof(raddr);
     if (chattyv2g) fprintf(stderr, "start listen %s fjhjh\n", if_name);
     // === Get interface index ===
     unsigned int if_index = if_nametoindex(if_name);
@@ -355,20 +359,20 @@ void sdp_listen(char* if_name, int tls_port, int tcp_port)
     // === Bind socket to SDP_SRV_PORT ===
     err = bind(sock, (struct sockaddr *) &laddr, sizeof(laddr));
     if (err != 0) {
-        close( sock );
+        close(sock);
         if (chattyv2g) fprintf(stderr, "%s: %m\n", "bind");
         exit(-1);
     }
     // === Join Multicast Group ===
-    memset( &mreq, 0, sizeof(mreq) );
-    memcpy( &mreq.ipv6mr_multiaddr,
-            SDP_MULTICAST_ADDR,
-            sizeof(mreq.ipv6mr_multiaddr) );
+    memset(&mreq, 0, sizeof(mreq));
+    memcpy(&mreq.ipv6mr_multiaddr,
+           SDP_MULTICAST_ADDR,
+           sizeof(mreq.ipv6mr_multiaddr));
     mreq.ipv6mr_interface = if_index;
-    err = setsockopt( sock, IPPROTO_IPV6, IPV6_JOIN_GROUP, &mreq, sizeof(mreq));
+    err = setsockopt(sock, IPPROTO_IPV6, IPV6_JOIN_GROUP, &mreq, sizeof(mreq));
     if (err != 0) {
-        close( sock );
-        if (chattyv2g) fprintf(stderr, "%s: %m\n",  "IPV6_JOIN_GROUP" );
+        close(sock);
+        if (chattyv2g) fprintf(stderr, "%s: %m\n", "IPV6_JOIN_GROUP");
         exit(-1);
     }
     if (chattyv2g) fprintf(stderr, "SDP set to using TLS port = %d, TCP port = %d\n", tls_port, tcp_port);
@@ -376,14 +380,14 @@ void sdp_listen(char* if_name, int tls_port, int tcp_port)
     if (chattyv2g) fprintf(stderr, "Receive SDP requests\n");
     for (;;) {
         byte buf[1024];
-        byte* payload = buf + SDP_HEADER_LEN;
+        byte *payload = buf + SDP_HEADER_LEN;
         byte evcc_security;
         len = recvfrom(sock, buf, 1024, 0,
                        (struct sockaddr *)&raddr,
-                       (socklen_t *)&raddr_len );
+                       (socklen_t *)&raddr_len);
         if (len != SDP_HEADER_LEN + SDP_REQ_PAYLOAD_LEN) {
             if (len == -1) {
-                if (chattyv2g) fprintf(stderr, "%s: %m\n",  "recvfrom" );
+                if (chattyv2g) fprintf(stderr, "%s: %m\n",  "recvfrom");
                 exit(-1);
             }
             if (chattyv2g) fprintf(stderr, "evse_sdp_listen_discovery_msg: invalid length\n");
@@ -399,47 +403,10 @@ void sdp_listen(char* if_name, int tls_port, int tcp_port)
         if (evcc_security == SDP_SECURITY_TLS && tls_port > 0) {
             if (chattyv2g) fprintf(stderr, "Respond SDP with security field = TLS\n");
             evse_sdp_respond(if_name, raddr, tls_port, SDP_SECURITY_TLS);
-        } else if (tcp_port > 0){
+        } else if (tcp_port > 0) {
             if (chattyv2g) fprintf(stderr, "Respond SDP with security field = no security\n");
             evse_sdp_respond(if_name, raddr, tcp_port, SDP_SECURITY_NONE);
         }
-        /*data[len] = '\0';
-        if (chattyv2g) fprintf(stderr,  "Received 0x%zu bytes: %s\n", len, data );
-
-        print_byte_arr( raddr.sin6_addr.s6_addr, sizeof( raddr.sin6_addr ) );
-        if (chattyv2g) fprintf(stderr, "Port: %d\n", ntohs( raddr.sin6_port ));*/
-        // === Respond to SDP request ===
-        // for( i = 0 ; i < 50 ; i ++ )
-        // sleep( 250ms)
-        // }
     }
     close(sock);
 }
-
-
-/*
-    mreq6.ipv6mr_multiaddr = ((SOCKADDR_IN6 *)resmulti->ai_addr)->sin6_addr;
-mreq6.ipv6mr_interface = ((SOCKADDR_IN6 *)reslocal->ai_addr)->sin6_scope_id;
-
-//setsockopt(s, IPPROTO_IPV6, IPV6_ADD_MEMBERSHIP, (char *)&mreq6, sizeof(mreq6));
-
-    bzero((char *)&addr, sizeof(addr));
-    addr.sin6_family = AF_INET6;
-    addr.sa_addr.in6_addr = htonl(INADDR_ANY);
-    addr.sa_port = htons(EXAMPLE_PORT);
-    addrlen = sizeof(addr);
-
-    if (argc > 1) {
-      // send
-      addr.sin_addr.s_addr = inet_addr(EXAMPLE_GROUP);
-      while (1) {
-     time_t t = time(0);
-     sif (chattyv2g) fprintf(stderr, message, "time is %-24.24s", ctime(&t));
-     if (chattyv2g) fprintf(stderr, "sending: %s\n", message);
-     cnt = sendto(sock, message, sizeof(message), 0,
-	          (struct sockaddr *) &addr, addrlen);
-     if (cnt < 0) {
-        if (chattyv2g) fprintf(stderr, "%s: %m\n", "sendto");
-        exit(1);
-     }
-}*/

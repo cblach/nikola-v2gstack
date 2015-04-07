@@ -1,11 +1,11 @@
 #include "map.h"
 
 int
-mapinit( Map *map,
-         size_t elemsz,
-         size_t nbuckets,
-         size_t (*hash)(Key),
-         int (*cmp)(Key, Key) )
+mapinit(Map *map,
+        size_t elemsz,
+        size_t nbuckets,
+        size_t (*hash)(Key),
+        int (*cmp)(Key, Key))
 {
     map->hash = hash;
     map->cmp = cmp;
@@ -17,8 +17,8 @@ mapinit( Map *map,
 }
 
 void *
-mapinsert( Map *map,
-           Key k )
+mapinsert(Map *map,
+          Key k)
 {
     size_t h = map->hash(k) % map->nbuckets;
     Bucket *b = malloc(sizeof(Bucket) + map->elemsz);
@@ -32,8 +32,8 @@ mapinsert( Map *map,
 }
 
 void *
-mapfind( Map *map,
-         Key k )
+mapfind(Map *map,
+        Key k)
 {
     size_t h = map->hash(k) % map->nbuckets;
     Bucket *b;
@@ -46,8 +46,8 @@ mapfind( Map *map,
 }
 
 void
-mapremove( Map *map,
-           Key k )
+mapremove(Map *map,
+          Key k)
 {
     size_t h = map->hash(k) % map->nbuckets;
     Bucket *b, *p;

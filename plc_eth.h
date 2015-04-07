@@ -45,34 +45,34 @@ typedef struct {
 //=======================================0
 // Note that ALL receiving buffers must
 // be at least ETH_FRAME_LEN bytes long
-int ethdial(ethconn_t* eth_conn,
-            char* if_name,
+int ethdial(ethconn_t *eth_conn,
+            const char *if_name,
               //byte dest_mac[6],
             uint16_t protocol);
-int ethclose(ethconn_t* eth_conn );
+int ethclose(ethconn_t *eth_conn);
 
-ssize_t ethrecv(ethconn_t* eth_conn ,
-			void* buffer);
-ssize_t ethrecvfrom(ethconn_t* eth_conn ,
-				void* buffer,
+ssize_t ethrecv(ethconn_t *eth_conn ,
+			void *buffer);
+ssize_t ethrecvfrom(ethconn_t *eth_conn ,
+				void *buffer,
 				uint8_t remote_mac[ETH_ALEN]);
 
-int ethsend(ethconn_t* ethconn ,
-            void* payload,
-            size_t payload_len );
-void ethwritehdr(void* vbuf, ethconn_t *ethconn, uint8_t destmac[6]);
+int ethsend(ethconn_t *ethconn,
+            void *payload,
+            size_t payload_len);
+void ethwritehdr(void *vbuf, ethconn_t *ethconn, uint8_t destmac[6]);
 
 //===== HIGHER LEVEL STUFF ======
 
-void recv_eth_package( void* arg );
+void recv_eth_package(void *arg);
 
-int switch_power_line(char* if_name, uint8_t dest_mac[6], bool powerline);
+int switch_power_line(const char *if_name, uint8_t dest_mac[6], bool powerline);
 
 int
-toggle_listen_slac_assn(ethconn_t* ethconn,uint8_t dest_mac[6], bool listen );
-//int terminate_dlink(struct ethconn_t* ethconn,byte dest_mac[6], bool resetup);
+toggle_listen_slac_assn(ethconn_t *ethconn,uint8_t dest_mac[6], bool listen);
+//int terminate_dlink(struct ethconn_t *ethconn,byte dest_mac[6], bool resetup);
 
-uint16_t get_slac_type(uint8_t* buf);
+uint16_t get_slac_type(uint8_t *buf);
 
-void print_byte_arr( void* arr, size_t n );
+void print_byte_arr(void *arr, size_t n);
 #endif
