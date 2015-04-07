@@ -1,3 +1,4 @@
+#include "nikolav2g.h"
 #include "plc_eth.h"
 
 
@@ -5,18 +6,19 @@
 // EVSE: sudo ./test -i eth1
 // EV: sudo ./test -t ev -i eth0
 
-void print_byte_arr( byte* arr, size_t n )
+void print_byte_arr( void* varr, size_t n )
 {
+    uint8_t* arr = (uint8_t*)varr;
     int i;
-    printf("[");
+    if (chattyv2g) fprintf(stderr, "[");
     // Highly ineffictive but whatever it's TESTING!! :D
     for( i = 0; i < n; i++) {
-        printf( " %02x", arr[i] );
+        if (chattyv2g) fprintf(stderr,  " %02x", arr[i] );
     }
-    printf(" ]\n");
+    if (chattyv2g) fprintf(stderr, " ]\n");
 }
 
-int lookup_mac(char* if_name, byte* mac){
+int lookup_mac(char* if_name, uint8_t* mac){
     int matches, err;
     FILE* f;
     char fnamebuf[256];
@@ -43,13 +45,13 @@ int lookup_mac(char* if_name, byte* mac){
 
 int ethdial(ethconn_t* ethconn,
               char* if_name,
-              //byte dest_mac[6],
+
               uint16_t protocol)
 {
-    byte src_mac[6];
+    uint8_t src_mac[6];
     int err = lookup_mac(if_name, src_mac);
     if (err != 0) {
-        printf("lookup mac err\n");
+        if (chattyv2g) fprintf(stderr, "lookup mac err\n");
         return -1;
     }
     ethconn->protocol = protocol;
@@ -59,7 +61,7 @@ int ethdial(ethconn_t* ethconn,
     }
     int if_index = if_nametoindex( if_name );
     if (if_index == 0) {
-        printf("if index lookup err\n");
+        if (chattyv2g) fprintf(stderr, "if index lookup err\n");
         return -1;
     }
     ethconn->if_index = if_index;
@@ -88,8 +90,8 @@ int ethclose(ethconn_t* ethconn ){
 }
 
 ssize_t ethrecvfrom(ethconn_t* ethconn ,
-					byte buffer[ETH_FRAME_LEN],
-					byte remote_mac[ETH_ALEN])
+					void* buffer,
+					uint8_t remote_mac[ETH_ALEN])
 {
     struct sockaddr_ll rsa = {
         .sll_family   = AF_PACKET,
@@ -106,14 +108,14 @@ ssize_t ethrecvfrom(ethconn_t* ethconn ,
                       &sockaddr_len);
 
     if( n == -1 ){
-        perror("recvfrom");
+        if (chattyv2g) fprintf(stderr, "%s: %m\n", "recvfrom");
         return -1;
     }
     return n;
 }
 
 ssize_t ethrecv(ethconn_t* ethconn ,
-					byte buffer[ETH_FRAME_LEN])
+					void* buffer)
 {
     //socklen_t sockaddr_len = sizeof( ethconn->rsaddr );
     int n = recvfrom(ethconn->sockfd, buffer, (size_t)ETH_FRAME_LEN, 0,
@@ -122,15 +124,15 @@ ssize_t ethrecv(ethconn_t* ethconn ,
                       //&sockaddr_len);
 
     if( n == -1 ){
-        perror("recvfrom");
+        if (chattyv2g) fprintf(stderr, "%s: %m\n", "recvfrom");
         return -1;
     }
     return n;
 }
 
-void ethwritehdr(void* vbuf, ethconn_t *ethconn, byte destmac[6])
+void ethwritehdr(void* vbuf, ethconn_t *ethconn, uint8_t destmac[6])
 {
-    byte* buf = vbuf;
+    uint8_t* buf = vbuf;
 	memcpy(buf, destmac, ETH_ALEN);
     memcpy(buf + ETH_ALEN, ethconn->src_mac, ETH_ALEN);
     //eh->h_proto = 0xcafe;
@@ -143,7 +145,6 @@ int ethsend(ethconn_t* ethconn,
              size_t data_len )
 {
     int send_result;
-    //byte buffer[ETH_FRAME_LEN];
     struct sockaddr_ll rsa = {
         .sll_family   = AF_PACKET,
         .sll_protocol = htons(ETH_P_IP),
@@ -154,14 +155,14 @@ int ethsend(ethconn_t* ethconn,
     };
     memcpy( rsa.sll_addr, data, ETH_ALEN );     // does this matter??
     if( data_len > ETH_FRAME_LEN ){
-        printf( "Payload is %zu bytes, but must be less than %d\n",
+        if (chattyv2g) fprintf(stderr,  "Payload is %zu bytes, but must be less than %d\n",
                 data_len, ETH_FRAME_LEN );
         errno = EMSGSIZE;
         return -1;
     }
     if( data_len < ETH_FRAME_MIN_SIZE) {
         data_len = ETH_FRAME_MIN_SIZE;
-        memset( (byte*)data + data_len, 0, ETH_FRAME_MIN_SIZE - data_len );
+        memset( (uint8_t*)data + data_len, 0, ETH_FRAME_MIN_SIZE - data_len );
     }
     send_result = sendto( ethconn->sockfd,
                           data, data_len+ETH_FRAME_HDR_SIZE,
@@ -170,7 +171,7 @@ int ethsend(ethconn_t* ethconn,
 	                      (struct sockaddr*)&rsa,
 	                      sizeof( rsa));
     if (send_result == -1) {
-        perror("sendto");
+        if (chattyv2g) fprintf(stderr, "%s: %m\n", "sendto");
         return -1;
     }
     return 0;
@@ -183,13 +184,13 @@ int ethsend(ethconn_t* ethconn,
 //==================================
 
 int
-toggle_listen_slac_assn(ethconn_t* ethconn, byte dest_mac[6], bool listen )
+toggle_listen_slac_assn(ethconn_t* ethconn, uint8_t dest_mac[6], bool listen )
 {
-    byte ethframe[ETH_FRAME_LEN];
-    byte* payload = ethframe + ETH_FRAME_HDR_SIZE;
+    uint8_t ethframe[ETH_FRAME_LEN];
+    uint8_t* payload = ethframe + ETH_FRAME_HDR_SIZE;
     size_t payload_len;
-    const byte listen_payload[3] = { 0x00, 0x0b, 0x01 };
-    const byte stoplisten_payload[4] = { 0x00, 0x0b, 0x03, 0x00 };
+    const uint8_t listen_payload[3] = { 0x00, 0x0b, 0x01 };
+    const uint8_t stoplisten_payload[4] = { 0x00, 0x0b, 0x03, 0x00 };
     ethwritehdr(ethframe, ethconn, dest_mac);
     if( listen ){
         memcpy(payload, listen_payload, 3);
@@ -201,7 +202,7 @@ toggle_listen_slac_assn(ethconn_t* ethconn, byte dest_mac[6], bool listen )
     }
     int err = ethsend( ethconn, ethframe, ETH_FRAME_HDR_SIZE + payload_len );
     if( err == -1 ) {
-        perror("plc_eth_send");
+        if (chattyv2g) fprintf(stderr, "%s: %m\n", "plc_eth_send");
     }
     return err;
 }
@@ -219,21 +220,21 @@ int terminate_dlink(ethconn_t* ethconn, byte dest_mac[6], bool resetup)
     memset(payload+3, 0, 58);
     err = ethsend(ethconn, dest_mac, payload, 61);
     if( err == -1 ) {
-        perror("plc_eth_send");
+        if (chattyv2g) fprintf(stderr, "%s: %m\n", "plc_eth_send");
     }
     return err;
 }*/
 
-int switch_power_line(char* if_name, byte dest_mac[6], bool toggle_powerline)
+int switch_power_line(char* if_name, uint8_t dest_mac[6], bool toggle_powerline)
 {
     ethconn_t ethconn;
     ethdial(&ethconn, if_name, 0xcafe);
 
-    byte ethframe[ETH_FRAME_LEN];
-    byte* payload = ethframe + ETH_FRAME_HDR_SIZE;
+    uint8_t ethframe[ETH_FRAME_LEN];
+    uint8_t* payload = ethframe + ETH_FRAME_HDR_SIZE;
     size_t payload_len;
-    const byte powerline_payload[3] = { 0x00, 0x0f, 0x10 };
-    const byte pilotline_payload[3] = { 0x00, 0x0f, 0x0e };
+    const uint8_t powerline_payload[3] = { 0x00, 0x0f, 0x10 };
+    const uint8_t pilotline_payload[3] = { 0x00, 0x0f, 0x0e };
     ethwritehdr(ethframe, &ethconn, dest_mac);
     if( toggle_powerline ){
         memcpy(payload, powerline_payload, 3);
@@ -246,13 +247,13 @@ int switch_power_line(char* if_name, byte dest_mac[6], bool toggle_powerline)
     }
     int err = ethsend( &ethconn, ethframe, ETH_FRAME_HDR_SIZE + payload_len );
     if( err == -1 ) {
-        perror("plc_eth_send");
+        if (chattyv2g) fprintf(stderr, "%s: %m\n", "plc_eth_send");
     }
     ethclose(&ethconn);
     return err;
 }
 
-uint16_t get_slac_type(byte* buf)
+uint16_t get_slac_type(uint8_t* buf)
 {
     size_t i = ETH_FRAME_HDR_SIZE + 1;
     return (buf[i] << 8) + buf[i+1];

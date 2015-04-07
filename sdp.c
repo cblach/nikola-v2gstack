@@ -1,3 +1,4 @@
+#include "nikolav2g.h"
 #include <errno.h>
 #include <string.h>
 #include <ifaddrs.h>
@@ -52,12 +53,12 @@ static inline uvlong nsleep( uvlong ns )
 static void print_byte_arr( byte* arr, size_t n )
 {
     int i;
-    printf("[");
+    if (chattyv2g) fprintf(stderr, "[");
     // Highly ineffictive but whatever it's TESTING!! :D
     for( i = 0; i < n; i++) {
-        printf( " %02x", arr[i] );
+        if (chattyv2g) fprintf(stderr,  " %02x", arr[i] );
     }
-    printf(" ]\n");
+    if (chattyv2g) fprintf(stderr, " ]\n");
 }
 
 static void write_header( byte* buf,
@@ -79,21 +80,21 @@ static int validate_header(byte* buf, uint16_t expected_payload_type,
     uint16_t payload_type;
     uint32_t payload_len;
     if (buf[0] != SDP_VERSION) {
-        printf("validate_header: invalid sdp version\n");
+        if (chattyv2g) fprintf(stderr, "validate_header: invalid sdp version\n");
         return -1;
     }
     if (buf[1] != SDP_INVERSE_VERSION) {
-        printf("validate_header: invalid inverse sdp version\n");
+        if (chattyv2g) fprintf(stderr, "validate_header: invalid inverse sdp version\n");
         return -1;
     }
     payload_type = (buf[2] << 8) + buf[3];
     if (payload_type != expected_payload_type) {
-        printf("validate_header: invalid payload type, expected %u, received %u\n", expected_payload_type, payload_type);
+        if (chattyv2g) fprintf(stderr, "validate_header: invalid payload type, expected %u, received %u\n", expected_payload_type, payload_type);
         return -1;
     }
     payload_len = (buf[4] << 24) + (buf[5] << 16) + (buf[6] << 8) + buf[7];
     if (payload_len != expected_payload_len) {
-        printf("validate_header: invalid payload length\n");
+        if (chattyv2g) fprintf(stderr, "validate_header: invalid payload length\n");
         return -1;
     }
     return 0;
@@ -148,14 +149,14 @@ static ssize_t request_writer(void* args, atomic_int *cancel) {
     payload[1] = 0x00; // TCP = underlying protocol not matter what
     // Keep sending up to 50 multicast messages until cancelled
     while (i < SDP_MAX_TRIES && atomic_load(cancel) == 0) {
-        printf("Broadcasting SDP multicast request, try %d\n", i+1);
+        if (chattyv2g) fprintf(stderr, "Broadcasting SDP multicast request, try %d\n", i+1);
         sentsz = sendto(wargs->sockfd, buf,
                         SDP_HEADER_LEN + SDP_REQ_PAYLOAD_LEN,
                         0, (struct sockaddr *)wargs->addr,
                         sizeof(struct sockaddr_in6));
         if (sentsz != 8+SDP_REQ_PAYLOAD_LEN) {
             if (sentsz == -1) {
-                perror("sendto");
+                if (chattyv2g) fprintf(stderr, "%s: %m\n", "sendto");
             }
             return -1;
         }
@@ -163,7 +164,7 @@ static ssize_t request_writer(void* args, atomic_int *cancel) {
         i++;
     }
     if (i == SDP_MAX_TRIES) {
-        printf("Unable to find EVSE, stopping discovery\n");
+        if (chattyv2g) fprintf(stderr, "Unable to find EVSE, stopping discovery\n");
     }
     return 0;
 }
@@ -182,31 +183,31 @@ static ssize_t response_reader( void* args, atomic_int *cancel ){
         len = recv(rargs->sockfd, buf, SDP_HEADER_LEN+SDP_RESP_PAYLOAD_LEN, 0);
         if (len != SDP_HEADER_LEN + SDP_RESP_PAYLOAD_LEN) {
             if (len == -1) {
-                perror("recv");
+                if (chattyv2g) fprintf(stderr, "%s: %m\n", "recv");
                 return -1;
             }
             continue;
         }
         err = validate_header(buf, SDP_RESP_TYPE, SDP_RESP_PAYLOAD_LEN);
         if (err != 0) {
-            printf("ev_sdp_resp_reader: validate_header error\n");
+            if (chattyv2g) fprintf(stderr, "ev_sdp_resp_reader: validate_header error\n");
             continue;
         }
         secc_security = payload[18];
         if (secc_security != expected_secc_security) {
-            printf("ev_sdp_resp_reader: evse does not support the chosen protocol, discarding\n");
+            if (chattyv2g) fprintf(stderr, "ev_sdp_resp_reader: evse does not support the chosen protocol, discarding\n");
             continue;
         }
         secc_transport_protocol = payload[19];
         if (secc_transport_protocol != 0x00) {
-            printf("ev_sdp_resp_reader: evse does not support TCP as underlying transport, discarding\n");
+            if (chattyv2g) fprintf(stderr, "ev_sdp_resp_reader: evse does not support TCP as underlying transport, discarding\n");
             continue;
         }
         break;
     }
     memcpy(rargs->addr->sin6_addr.s6_addr, payload, 16);
     memcpy(&rargs->addr->sin6_port, payload + 16, 2 );
-    printf("Succesful SDP response from EVSE\n");
+    if (chattyv2g) fprintf(stderr, "Succesful SDP response from EVSE\n");
     return 0;
 }
 
@@ -223,7 +224,7 @@ int ev_sdp_discover_evse( char* if_name, struct sockaddr_in6* evse_addr, bool tl
     unsigned int if_index;
     ioargs rargs, wargs;
 	if (iocr == NULL || iocw == NULL) {
-	    printf("slac_sendrecvloop: iochan error\n");
+	    if (chattyv2g) fprintf(stderr, "slac_sendrecvloop: iochan error\n");
 	    if (iocr != NULL) {
 	        chanfree(iocr);
 	    }
@@ -235,13 +236,13 @@ int ev_sdp_discover_evse( char* if_name, struct sockaddr_in6* evse_addr, bool tl
     // === Get interface index ===
     if_index = if_nametoindex(if_name);
     if (if_index == 0) {
-        perror("interface_index");
+        if (chattyv2g) fprintf(stderr, "%s: %m\n", "interface_index");
         return -1;
     }
     evse_addr->sin6_family = AF_INET6;
     evse_addr->sin6_scope_id = if_index;
     // === Set up socket ===
-    printf("Setting up socket\n");
+    if (chattyv2g) fprintf(stderr, "Setting up socket\n");
     sock = socket(AF_INET6, SOCK_DGRAM, IPPROTO_UDP);
     if (sock < 0) {
         return -1;
@@ -249,7 +250,7 @@ int ev_sdp_discover_evse( char* if_name, struct sockaddr_in6* evse_addr, bool tl
     // === Specify the socket used for multicast ===
     err = setsockopt(sock, IPPROTO_IPV6, IPV6_MULTICAST_IF, &if_index, sizeof(if_index));
     if (err < 0) {
-        perror("setsockopt");
+        if (chattyv2g) fprintf(stderr, "%s: %m\n", "setsockopt");
         close(sock);
         return -1;
     }
@@ -271,7 +272,7 @@ int ev_sdp_discover_evse( char* if_name, struct sockaddr_in6* evse_addr, bool tl
     switch (alt(alts)) {
         case 0: // Done reading response
             iocancel(iocw);
-            printf("received response\n");
+            if (chattyv2g) fprintf(stderr, "received response\n");
             err = ret;
             break;
         case 1: // Done writing and no response -> error
@@ -279,7 +280,7 @@ int ev_sdp_discover_evse( char* if_name, struct sockaddr_in6* evse_addr, bool tl
             err = -1;
             break;
         default:
-            printf("critical ev_sdp_discover_evse: alt error\n");
+            if (chattyv2g) fprintf(stderr, "critical ev_sdp_discover_evse: alt error\n");
             abort();
     }
     chanfree(iocr);
@@ -302,11 +303,11 @@ void evse_sdp_respond(char* if_name, struct sockaddr_in6 raddr, uint16_t port, b
     // === Create ipv6 udp socket ===
     int sock = socket( AF_INET6, SOCK_DGRAM, IPPROTO_UDP );
     if (sock < 0) {
-        perror("socket");
+        if (chattyv2g) fprintf(stderr, "%s: %m\n", "socket");
         exit(-1);
     }
     if (get_interface_ipv6_address(if_name, &laddr)){
-        perror("if_name_to_ipv6_addr");
+        if (chattyv2g) fprintf(stderr, "%s: %m\n", "if_name_to_ipv6_addr");
         return;
     }
     // === Write sdp response packet ===
@@ -317,12 +318,12 @@ void evse_sdp_respond(char* if_name, struct sockaddr_in6 raddr, uint16_t port, b
     payload[19] = 0; // Set underlying protocol to TCP (no choice)
     // === Send sdp response packet ===
     print_byte_arr(raddr.sin6_addr.s6_addr, sizeof(struct sockaddr_in6));
-    printf("======SEND\n");
+    if (chattyv2g) fprintf(stderr, "======SEND\n");
     sentSz = sendto(sock, buf,
                     SDP_HEADER_LEN+SDP_RESP_PAYLOAD_LEN, 0,
                     (struct sockaddr *)&raddr, sizeof(struct sockaddr_in6));
     if (sentSz < SDP_HEADER_LEN+SDP_RESP_PAYLOAD_LEN) {
-        perror( "sendto");
+        if (chattyv2g) fprintf(stderr, "%s: %m\n",  "sendto");
     }
     close(sock);
 }
@@ -338,24 +339,24 @@ void sdp_listen(char* if_name, int tls_port, int tcp_port)
     struct ipv6_mreq mreq;
     struct sockaddr_in6 raddr;
     size_t raddr_len = sizeof( raddr );
-    printf("start listen %s fjhjh\n", if_name);
+    if (chattyv2g) fprintf(stderr, "start listen %s fjhjh\n", if_name);
     // === Get interface index ===
     unsigned int if_index = if_nametoindex(if_name);
     if (if_index == 0) {
-        perror("interface_index");
+        if (chattyv2g) fprintf(stderr, "%s: %m\n", "interface_index");
         exit(-1);
     }
     //sock = announce("udp![::1]:15118");
     sock = socket(AF_INET6, SOCK_DGRAM, IPPROTO_UDP);
     if (sock < 0) {
-        perror("socket");
+        if (chattyv2g) fprintf(stderr, "%s: %m\n", "socket");
         exit(-1);
     }
     // === Bind socket to SDP_SRV_PORT ===
     err = bind(sock, (struct sockaddr *) &laddr, sizeof(laddr));
     if (err != 0) {
         close( sock );
-        perror("bind");
+        if (chattyv2g) fprintf(stderr, "%s: %m\n", "bind");
         exit(-1);
     }
     // === Join Multicast Group ===
@@ -367,11 +368,12 @@ void sdp_listen(char* if_name, int tls_port, int tcp_port)
     err = setsockopt( sock, IPPROTO_IPV6, IPV6_JOIN_GROUP, &mreq, sizeof(mreq));
     if (err != 0) {
         close( sock );
-        perror( "IPV6_JOIN_GROUP" );
+        if (chattyv2g) fprintf(stderr, "%s: %m\n",  "IPV6_JOIN_GROUP" );
         exit(-1);
     }
+    if (chattyv2g) fprintf(stderr, "SDP set to using TLS port = %d, TCP port = %d\n", tls_port, tcp_port);
     // === Keep receiving SDP requests ===
-    printf("Receive SDP requests\n");
+    if (chattyv2g) fprintf(stderr, "Receive SDP requests\n");
     for (;;) {
         byte buf[1024];
         byte* payload = buf + SDP_HEADER_LEN;
@@ -381,29 +383,31 @@ void sdp_listen(char* if_name, int tls_port, int tcp_port)
                        (socklen_t *)&raddr_len );
         if (len != SDP_HEADER_LEN + SDP_REQ_PAYLOAD_LEN) {
             if (len == -1) {
-                perror( "recvfrom" );
+                if (chattyv2g) fprintf(stderr, "%s: %m\n",  "recvfrom" );
                 exit(-1);
             }
-            printf("evse_sdp_listen_discovery_msg: invalid length\n");
+            if (chattyv2g) fprintf(stderr, "evse_sdp_listen_discovery_msg: invalid length\n");
             continue;
         }
         err = validate_header(buf, SDP_REQ_TYPE, SDP_REQ_PAYLOAD_LEN);
         if (err != 0) {
-            printf("evse_sdp_listen_discovery_msg: invalid header\n");
+            if (chattyv2g) fprintf(stderr, "evse_sdp_listen_discovery_msg: invalid header\n");
             continue;
         }
         evcc_security = payload[0];
-        printf("SECC security = 0x%0x\n", evcc_security);
+        if (chattyv2g) fprintf(stderr, "SECC security = 0x%0x\n", evcc_security);
         if (evcc_security == SDP_SECURITY_TLS && tls_port > 0) {
+            if (chattyv2g) fprintf(stderr, "Respond SDP with security field = TLS\n");
             evse_sdp_respond(if_name, raddr, tls_port, SDP_SECURITY_TLS);
         } else if (tcp_port > 0){
+            if (chattyv2g) fprintf(stderr, "Respond SDP with security field = no security\n");
             evse_sdp_respond(if_name, raddr, tcp_port, SDP_SECURITY_NONE);
         }
         /*data[len] = '\0';
-        printf( "Received 0x%zu bytes: %s\n", len, data );
+        if (chattyv2g) fprintf(stderr,  "Received 0x%zu bytes: %s\n", len, data );
 
         print_byte_arr( raddr.sin6_addr.s6_addr, sizeof( raddr.sin6_addr ) );
-        printf("Port: %d\n", ntohs( raddr.sin6_port ));*/
+        if (chattyv2g) fprintf(stderr, "Port: %d\n", ntohs( raddr.sin6_port ));*/
         // === Respond to SDP request ===
         // for( i = 0 ; i < 50 ; i ++ )
         // sleep( 250ms)
@@ -430,12 +434,12 @@ mreq6.ipv6mr_interface = ((SOCKADDR_IN6 *)reslocal->ai_addr)->sin6_scope_id;
       addr.sin_addr.s_addr = inet_addr(EXAMPLE_GROUP);
       while (1) {
      time_t t = time(0);
-     sprintf(message, "time is %-24.24s", ctime(&t));
-     printf("sending: %s\n", message);
+     sif (chattyv2g) fprintf(stderr, message, "time is %-24.24s", ctime(&t));
+     if (chattyv2g) fprintf(stderr, "sending: %s\n", message);
      cnt = sendto(sock, message, sizeof(message), 0,
 	          (struct sockaddr *) &addr, addrlen);
      if (cnt < 0) {
-        perror("sendto");
+        if (chattyv2g) fprintf(stderr, "%s: %m\n", "sendto");
         exit(1);
      }
 }*/

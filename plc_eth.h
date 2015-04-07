@@ -20,15 +20,12 @@
 
 #ifndef PLC_ETH_H
 #define PLC_ETH_H 1
-#ifndef byte
-typedef unsigned char byte;
-#endif
 static const size_t ETH_FRAME_HDR_SIZE = 14;
 static const size_t ETH_FRAME_MIN_PAYLOAD_SIZE = 46;
 static const size_t ETH_FRAME_MIN_SIZE = ETH_FRAME_HDR_SIZE + ETH_FRAME_MIN_PAYLOAD_SIZE;
 
-static byte ETH_BROADCAST_ADDR[ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-static byte ETH_LOCAL_ATHEROS_DEVICE[ETH_ALEN] = {0x00, 0xb0, 0x52, 0x00, 0x00, 0x01};
+static uint8_t ETH_BROADCAST_ADDR[ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+static uint8_t ETH_LOCAL_ATHEROS_DEVICE[ETH_ALEN] = {0x00, 0xb0, 0x52, 0x00, 0x00, 0x01};
 
 #define ETH_P_HPAV 0x88E1
 #define ETH_P_TOGGLE_PILOT 0xcafe
@@ -39,18 +36,15 @@ static byte ETH_LOCAL_ATHEROS_DEVICE[ETH_ALEN] = {0x00, 0xb0, 0x52, 0x00, 0x00, 
 typedef struct {
 	int sockfd;
 	int if_index;
-	byte src_mac[6];
+	uint8_t src_mac[6];
 //	byte dest_mac[6];
 	uint16_t protocol;
 //	struct sockaddr_ll rsaddr;
 } ethconn_t;
-/*
-struct __attribute__((packed)) ethernet_hdr {
-    byte destmac[6];
-    byte srcmac[6];
-    byte protocol[2];
-};*/
 
+//=======================================0
+// Note that ALL receiving buffers must
+// be at least ETH_FRAME_LEN bytes long
 int ethdial(ethconn_t* eth_conn,
             char* if_name,
               //byte dest_mac[6],
@@ -58,27 +52,27 @@ int ethdial(ethconn_t* eth_conn,
 int ethclose(ethconn_t* eth_conn );
 
 ssize_t ethrecv(ethconn_t* eth_conn ,
-			byte buffer[ETH_FRAME_LEN]);
+			void* buffer);
 ssize_t ethrecvfrom(ethconn_t* eth_conn ,
-				byte buffer[ETH_FRAME_LEN],
-				byte remote_mac[ETH_ALEN]);
+				void* buffer,
+				uint8_t remote_mac[ETH_ALEN]);
 
 int ethsend(ethconn_t* ethconn ,
             void* payload,
             size_t payload_len );
-void ethwritehdr(void* vbuf, ethconn_t *ethconn, byte destmac[6]);
+void ethwritehdr(void* vbuf, ethconn_t *ethconn, uint8_t destmac[6]);
 
 //===== HIGHER LEVEL STUFF ======
 
 void recv_eth_package( void* arg );
 
-int switch_power_line(char* if_name, byte dest_mac[6], bool powerline);
+int switch_power_line(char* if_name, uint8_t dest_mac[6], bool powerline);
 
 int
-toggle_listen_slac_assn(ethconn_t* ethconn,byte dest_mac[6], bool listen );
+toggle_listen_slac_assn(ethconn_t* ethconn,uint8_t dest_mac[6], bool listen );
 //int terminate_dlink(struct ethconn_t* ethconn,byte dest_mac[6], bool resetup);
 
-uint16_t get_slac_type(byte* buf);
+uint16_t get_slac_type(uint8_t* buf);
 
-void print_byte_arr( byte* arr, size_t n );
+void print_byte_arr( void* arr, size_t n );
 #endif

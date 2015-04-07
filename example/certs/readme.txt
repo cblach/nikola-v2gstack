@@ -32,3 +32,5 @@ openssl ca -keyfile root/mobilityop/keys/mobilityop.key \
     -cert root/mobilityop/certs/mobilityop.pem \
     -extensions usr_cert -notext -md sha256 -config ca/mobilityop/openssl.cfg \
     -in contract.csr -out contract.pem -outdir . -verbose
+
+openssl verify -CAfile root/mobilityop/certs/mobilityop.pem contract.pem    

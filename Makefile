@@ -1,43 +1,30 @@
-CC=clang -Wall -pedantic -std=gnu11
-LD=ar
-CFLAGS=-g -O0
-LDFLAGS=rcs
+CC=clang
+AR=ar
+CFLAGS=-g -Os -Wall -pedantic
+
+PREFIX=/usr/local
+LIBDIR=$(PREFIX)/lib
+INCDIR=$(PREFIX)/include
 
 TARGET=libnikolav2g.a
+HEADER=nikolav2g.h
 
-SOURCES=\
-    sdp.c\
-    plc_eth.c\
-    v2gconn.c\
-    map.c\
-    session.c\
-
-HEADERS=\
-    plc_eth.h\
-    libnikolav2g.h\
-    map.h\
-    homeplug.h\
-
-OBJECTS=\
-    $(SOURCES:.c=.o)\
-
-LIBS=\
-/usr/local/lib/libmbedtls.a\
-utils/libmultitask/unix/libmultitask.a\
-utils/OpenV2G_0.9.3/libOpenV2G.a\
-
-
-INCLUDES=\
-    -Iutils/libmultitask/unix\
-    -Iutils/OpenV2G_0.9.3/src/codec\
-    -Iutils/OpenV2G_0.9.3/src/appHandshake\
-    -Iutils/OpenV2G_0.9.3/src/transport\
-
-.c.o:
-	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $<
+SOURCES=$(wildcard *.c)
+OBJECTS=$(SOURCES:.c=.o)
 
 $(TARGET): $(OBJECTS)
-	$(LD) $(LDFLAGS) $(TARGET) $(OBJECTS) $(LIBS)
+	$(AR) rcs $(TARGET) $(OBJECTS)
+
+$(OBJECTS): $(HEADER)
+
+.c.o:
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+install: $(TARGET)
+	install -D $(TARGET) $(DESTDIR)$(LIBDIR)/$(TARGET)
+	install -D $(HEADER) $(DESTDIR)$(INCDIR)/$(HEADER)
 
 clean:
 	rm -f $(OBJECTS) $(TARGET)
+
+.PHONY: install clean

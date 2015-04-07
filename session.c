@@ -6,7 +6,7 @@
 #include "map.h"
 #include <inttypes.h>
 #include <unistd.h>
-#include "v2gstack.h"
+#include "nikolav2g.h"
 Map session_map;
 QLock session_map_mutex;
 
@@ -27,13 +27,13 @@ int gen_random_data( void* dest, size_t dest_len ){
     int fd = open( "/dev/urandom", O_RDONLY );
     int len = 0;
     if (fd == -1){
-        perror("gen_random_data: open /dev/urandom");
+        if (chattyv2g) fprintf(stderr, "%s: %m\n", "gen_random_data: open /dev/urandom");
         return -1;
     }
     while ( len < dest_len ){
         ssize_t result = read( fd, (char*)dest + len, dest_len - len);
         if ( result < 0 ){
-            perror("gen_random_data: read");
+            if (chattyv2g) fprintf(stderr, "%s: %m\n", "gen_random_data: read");
             close(fd);
             return -1;
         }
@@ -132,7 +132,6 @@ session_t* session_new(/*bool tls_enabled*/)
         return NULL;
     }
     *sessionpp = malloc(sizeof(session_t));
-    printf("pointer=%p %p\n", sessionpp, (session_t**)mapfind( &session_map, k ));
     if (*sessionpp == NULL) {
         return NULL;
     }
@@ -177,9 +176,9 @@ void session_remove_ref(session_t* session)
     session->refcount--;
     if (session->refcount == 0 && session->status == SESSION_TERMINATED) {
         free(session);
-        printf("Succesfully freed session\n");
+        if (chattyv2g) fprintf(stderr, "Succesfully freed session\n");
     } else if(session->refcount < 0) {
-        printf("session_remove_ref: Negative session ref-count\n");
+        if (chattyv2g) fprintf(stderr, "session_remove_ref: Negative session ref-count\n");
     }
     session_unlock(session);
 }

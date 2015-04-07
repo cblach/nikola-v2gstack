@@ -19,9 +19,9 @@ OBJECTS=\
 
 LIBS=\
 ../libnikolav2g.a\
-../utils/libmultitask/unix/libmultitask.a\
-../utils/OpenV2G_0.9.3/libOpenV2G.a\
-/usr/local/lib/libmbedtls.a\
+-lmultitask\
+-lOpenV2G\
+-lmbedtls\
 -lm\
 -lrt\
 -lpthread\

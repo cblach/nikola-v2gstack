@@ -1,6 +1,8 @@
 #include "plc_eth.h"
 #include <stdio.h>
 #include "multitask.h"
+
+typedef uint8_t byte;
 struct plgp_slac_args{
     char* if_name;
     byte* evse_mac;

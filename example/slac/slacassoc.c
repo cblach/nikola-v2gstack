@@ -6,6 +6,8 @@
 #include <endian.h>
 #include "multitask.h"
 #include <limits.h>
+
+typedef uint8_t byte;
 /*#define HOMEPLUG_MMV 0x01
 #define HOMEPLUG_MMTYPE 0x0000*/
 #define HOMEPLUG_HDR_SIZE 5
@@ -43,7 +45,7 @@ void ethhomeplughdr (void* vbuf, uint8_t mmv, uint16_t mmtype)
     buf[4] = 0; // FMID
 }
 
-int slac_verify_response(byte* buf, uint8_t mmv, uint16_t mmtype)
+int slac_verify_response(void* buf, uint8_t mmv, uint16_t mmtype)
 {
     struct homeplug* homeplug = (struct homeplug *)(buf);
     if (ntohs (homeplug->ethernet.MTYPE) != ETH_P_HPAV) {
@@ -119,7 +121,7 @@ static ssize_t slac_iorecvloop(void* vargs, atomic_int *cancel)
 }
 
 // Cancellable ethnernet receive/read (cancelled with a send on channel chnc)
-ssize_t slac_recv_c( ethconn_t* ethconn, byte* ethframe, byte mmv, uint16_t mmtype, Chan* chnc)
+ssize_t slac_recv_c( ethconn_t* ethconn, void* ethframe, byte mmv, uint16_t mmtype, Chan* chnc)
 {
     ssize_t ret;
     ssize_t err;
@@ -159,7 +161,7 @@ ssize_t slac_recv_c( ethconn_t* ethconn, byte* ethframe, byte mmv, uint16_t mmty
 // recv_mmtype is received.
 // !! Note that while the framelen can vary, the underlying
 // ethframe buffer must always be at least ETH_FRAME_LEN bytes. !!
-ssize_t slac_sendrecvloop( ethconn_t* ethconn, byte* ethframe, size_t framelen,
+ssize_t slac_sendrecvloop( ethconn_t* ethconn, void* ethframe, size_t framelen,
                        byte recv_mmv, uint16_t recv_mmtype,
                        int max_send_tries, uvlong senddelay_ns )
 {

@@ -1,11 +1,11 @@
 #include <stdio.h>
-#include "v2gstack.h"
-#include "EXITypes.h"
-#include "v2gEXIDatatypes.h"
-#include "v2gEXIDatatypesEncoder.h"
-#include "xmldsigEXIDatatypes.h"
-#include "xmldsigEXIDatatypesEncoder.h"
-#include "v2gtp.h"
+#include "nikolav2g.h"
+#include "OpenV2G/EXITypes.h"
+#include "OpenV2G/v2gEXIDatatypes.h"
+#include "OpenV2G/v2gEXIDatatypesEncoder.h"
+#include "OpenV2G/xmldsigEXIDatatypes.h"
+#include "OpenV2G/xmldsigEXIDatatypesEncoder.h"
+#include "OpenV2G/v2gtp.h"
 #include <string.h>
 #include <unistd.h>
 #include "polarssl/pk.h"
@@ -18,15 +18,15 @@
 typedef struct ev_session{
     uint64_t id;
     uint16_t charge_service_id;
-    byte challenge[16];
+    uint8_t challenge[16];
     struct{
         bool is_used;
         uint8_t tupleid;
     } pmax_schedule;
     struct{
-        byte cert[v2gCertificateChainType_Certificate_BYTES_SIZE];
+        uint8_t cert[v2gCertificateChainType_Certificate_BYTES_SIZE];
         size_t cert_len;
-        byte sub_certs[v2gSubCertificatesType_Certificate_ARRAY_SIZE][v2gCertificateChainType_Certificate_BYTES_SIZE];
+        uint8_t  sub_certs[v2gSubCertificatesType_Certificate_ARRAY_SIZE][v2gCertificateChainType_Certificate_BYTES_SIZE];
         size_t subcert_len[v2gSubCertificatesType_Certificate_ARRAY_SIZE];
         ecdsa_context key;
         entropy_context entropy;
@@ -111,7 +111,7 @@ int sign_auth_request(struct v2gAuthorizationReqType* req,
                       struct v2gSignatureType* sig) {
     int err;
     unsigned char buf[256];
-    byte digest[32];
+    uint8_t digest[32];
     uint16_t buffer_pos = 0;
     bitstream_t stream = {
         .size = 256,
@@ -273,8 +273,6 @@ int session_request(struct ev_tls_conn_t* conn, ev_session_t* ev_session)
 
 	exiIn.V2G_Message.Body.SessionSetupReq.EVCCID.bytesLen = 1;
 	exiIn.V2G_Message.Body.SessionSetupReq.EVCCID.bytes[0] = 20;
-
-	printf("VAR = %u\n", exiIn.V2G_Message_isUsed);
 	err = v2g_request(conn, &exiIn, &exiOut);
     if (err != 0) {
         printf("unable to do v2g_request, exiting\n");

@@ -1,5 +1,5 @@
 
-#include "v2gstack.h"
+#include "nikolav2g.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -7,9 +7,9 @@
 #include <limits.h>
 #include "polarssl/ssl_cache.h"
 #include "polarssl/error.h"
-#include "appHandEXIDatatypes.h"
-#include "appHandEXIDatatypesEncoder.h"
-#include "appHandEXIDatatypesDecoder.h"
+#include "OpenV2G/appHandEXIDatatypes.h"
+#include "OpenV2G/appHandEXIDatatypesEncoder.h"
+#include "OpenV2G/appHandEXIDatatypesDecoder.h"
 /*
 #if DEPLOY_DIN_CODEC == SUPPORT_YES
 #include "dinEXIDatatypes.h"
@@ -17,10 +17,9 @@
 #include "dinEXIDatatypesDecoder.h"
 #endif // DEPLOY_DIN_CODEC == SUPPORT_YES
 */
-#include "v2gEXIDatatypesEncoder.h"
-#include "v2gEXIDatatypesDecoder.h"
-#include "v2gtp.h"
-#include "tcpfuncs.c"
+#include "OpenV2G/v2gEXIDatatypesEncoder.h"
+#include "OpenV2G/v2gEXIDatatypesDecoder.h"
+#include "OpenV2G/v2gtp.h"
 //===================================
 //             Defines
 //===================================
@@ -101,36 +100,171 @@ uint16_t SECC_Port;
 void print_byte_array( byte* arr, size_t n )
 {
     int i;
-    printf("[");
+    if (chattyv2g) fprintf(stderr, "[");
     // Highly ineffictive but whatever it's TESTING!! :D
     for( i = 0; i < n; i++) {
-        printf( " %02x", arr[i] );
+        if (chattyv2g) fprintf(stderr,  " %02x", arr[i] );
     }
-    printf(" ]\n");
+    if (chattyv2g) fprintf(stderr, " ]\n");
 }
 
 void print_ssl_read_err( int err)
 {
     switch (err) {
         case POLARSSL_ERR_SSL_PEER_CLOSE_NOTIFY:
-            printf( "connection was closed gracefully\n");
+            if (chattyv2g) fprintf(stderr,  "connection was closed gracefully\n");
             return;
         case POLARSSL_ERR_NET_CONN_RESET:
-            printf( "connection was reset by peer\n");
+            if (chattyv2g) fprintf(stderr,  "connection was reset by peer\n");
             return;
         case POLARSSL_ERR_NET_WANT_READ:
         case POLARSSL_ERR_NET_WANT_WRITE:
-            printf("ssl socket error; want read/want write\n");
+            if (chattyv2g) fprintf(stderr, "ssl socket error; want read/want write\n");
             return;
         case 0:
-            printf("EOF\n");
+            if (chattyv2g) fprintf(stderr, "EOF\n");
             return;
         default:
-            printf( "ssl_read returned -0x%04x\n", -err );
+            if (chattyv2g) fprintf(stderr,  "ssl_read returned -0x%04x\n", -err );
             return;
     }
 }
 
+//======================================
+//            Non-SSL IO functions
+//======================================
+typedef struct{
+    int sockfd;
+    byte* buffer;
+    unsigned int n;
+} tcpn_arg;
+
+static ssize_t iocall_readn( void* vargs, atomic_int *cancel )
+{
+    tcpn_arg* args = vargs;
+    int bytes_read = 0;
+    int tries = 0;
+    int ret;
+    while (bytes_read < args->n && atomic_load(cancel) == 0) {
+        ret = read(args->sockfd, args->buffer + bytes_read,
+                   args->n - bytes_read);
+        if( ret == POLARSSL_ERR_NET_WANT_READ ||
+            ret == POLARSSL_ERR_NET_WANT_WRITE ) {
+            if (tries > 30) {
+                if (chattyv2g) fprintf(stderr, "sslreadn: Too many socket read errors\n");
+                return -1;
+            }
+            continue;
+        }
+        if (ret < 1) {
+            if (ret != 0) {
+                if (chattyv2g) fprintf(stderr, "%s: %m\n", "iocall_readn: read err");
+            }
+            return -1;
+        }
+        bytes_read += ret;
+    }
+    return 0;
+}
+
+static ssize_t iocall_writen( void* vargs, atomic_int *cancel )
+{
+    tcpn_arg* args = vargs;
+    int bytes_written = 0;
+    int ret;
+    while (bytes_written < args->n && atomic_load(cancel) == 0) {
+        ret = write(args->sockfd, args->buffer + bytes_written,
+                    args->n - bytes_written);
+        if (ret < 1) {
+            if (ret != 0) {
+                if (chattyv2g) fprintf(stderr, "%s: %m\n", "iocall_writen: write err");
+            }
+            return -1;
+        }
+        bytes_written += ret;
+    }
+    return 0;
+}
+
+static int readn( int sockfd, byte* buffer,
+                  unsigned int n, Chan* tc ) {
+    Alt alts[3];
+    tcpn_arg args = {
+        .sockfd = sockfd,
+        .buffer = buffer,
+        .n = n,
+    };
+    ssize_t ret;
+    int err;
+    Chan *ioc = iochan(1048576 - PTHREAD_STACK_MIN);
+    if (ioc == NULL) {
+        if (chattyv2g) fprintf(stderr, "sslreadn error: iochan error\n");
+        return -1;
+    }
+    iocall(ioc, &iocall_readn, &args, sizeof(args));
+    alts[0].c = ioc;
+    alts[0].v = &ret;
+    alts[0].op = CHANRECV;
+    alts[1].c = tc;
+    alts[1].v = NULL;
+    alts[1].op = CHANRECV;
+    alts[2].op = CHANEND;
+    switch (alt(alts)) {
+        case 0:
+            err = (int)ret;
+            break;
+        case 1:
+            iocancel(ioc);
+            if (chattyv2g) fprintf(stderr, "sslreadn error: timeout\n");
+            err = -1;
+            break;
+        default:
+            if (chattyv2g) fprintf(stderr, "critical sslreadn: alt error\n");
+            abort();
+    }
+    chanfree(ioc);
+    return err;
+}
+
+static int writen( int sockfd, byte* buffer,
+                   unsigned int n, Chan* tc ){
+    Alt alts[3];
+    tcpn_arg args = {
+        .sockfd = sockfd,
+        .buffer = buffer,
+        .n = n,
+    };
+    ssize_t ret;
+    int err;
+    Chan *ioc = iochan(1048576 - PTHREAD_STACK_MIN);
+    if (ioc == NULL) {
+        if (chattyv2g) fprintf(stderr, "sslwriten error: iochan error\n");
+        return -1;
+    }
+    iocall(ioc, &iocall_writen, &args, sizeof(args));
+    alts[0].c = ioc;
+    alts[0].v = &ret;
+    alts[0].op = CHANRECV;
+    alts[1].c = tc;
+    alts[1].v = NULL;
+    alts[1].op = CHANRECV;
+    alts[2].op = CHANEND;
+    switch (alt(alts)) {
+        case 0:
+            err = (int) ret;
+            break;
+        case 1:
+            iocancel(ioc);
+            if (chattyv2g) fprintf(stderr, "sslwriten error: timeout\n");
+            err = -1;
+            break;
+        default:
+            if (chattyv2g) fprintf(stderr, "critical sslwriten: alt error\n");
+            abort();
+    }
+    chanfree(ioc);
+    return err;
+}
 //======================================
 //            SSL IO functions
 //======================================
@@ -146,7 +280,7 @@ static ssize_t iocall_sslreadn( void* vargs, atomic_int *cancel )
         if( ret == POLARSSL_ERR_NET_WANT_READ ||
             ret == POLARSSL_ERR_NET_WANT_WRITE ) {
             if (tries > 30) {
-                printf("sslreadn: Too many socket read errors\n");
+                if (chattyv2g) fprintf(stderr, "sslreadn: Too many socket read errors\n");
                 return -1;
             }
             continue;
@@ -190,7 +324,7 @@ static int sslreadn( ssl_context *ssl, byte* buffer,
     int err;
     Chan *ioc = iochan(1048576 - PTHREAD_STACK_MIN);
     if (ioc == NULL) {
-        printf("sslreadn error: iochan error\n");
+        if (chattyv2g) fprintf(stderr, "sslreadn error: iochan error\n");
         return -1;
     }
     iocall(ioc, &iocall_sslreadn, &args, sizeof(args));
@@ -207,11 +341,11 @@ static int sslreadn( ssl_context *ssl, byte* buffer,
             break;
         case 1:
             iocancel(ioc);
-            printf("sslreadn error: timeout\n");
+            if (chattyv2g) fprintf(stderr, "sslreadn error: timeout\n");
             err = -1;
             break;
         default:
-            printf("critical sslreadn: alt error\n");
+            if (chattyv2g) fprintf(stderr, "critical sslreadn: alt error\n");
             abort();
     }
     chanfree(ioc);
@@ -230,7 +364,7 @@ static int sslwriten( ssl_context *ssl, byte* buffer,
     int err;
     Chan *ioc = iochan(1048576 - PTHREAD_STACK_MIN);
     if (ioc == NULL) {
-        printf("sslwriten error: iochan error\n");
+        if (chattyv2g) fprintf(stderr, "sslwriten error: iochan error\n");
         return -1;
     }
     iocall(ioc, &iocall_sslwriten, &args, sizeof(args));
@@ -247,11 +381,11 @@ static int sslwriten( ssl_context *ssl, byte* buffer,
             break;
         case 1:
             iocancel(ioc);
-            printf("sslwriten error: timeout\n");
+            if (chattyv2g) fprintf(stderr, "sslwriten error: timeout\n");
             err = -1;
             break;
         default:
-            printf("critical sslwriten: alt error\n");
+            if (chattyv2g) fprintf(stderr, "critical sslwriten: alt error\n");
             abort();
     }
     chanfree(ioc);
@@ -286,8 +420,12 @@ uint16_t get_secc_port()
 void my_debug( void *ctx, int level, const char *str )
 {
     ((void)level);
-    fprintf( (FILE *) ctx, "%s", str );
-    fflush(  (FILE *) ctx  );
+    ((void)ctx);
+    if (chattyv2g) {
+        fprintf(stderr, "%s", str );
+        fflush(stderr);
+    }
+
 }
 
 //======================================
@@ -383,7 +521,7 @@ uvlong get_req_timeout(struct v2gEXIDocument* exiIn ){
 	} else if (exiIn->V2G_Message.Body.CertificateUpdateReq_isUsed) {
 	    return (uvlong)V2G_EVCC_Msg_Timeout_CertificateUpdateReq * TIME_SECOND;
 	} else {
-	    printf("get_req_timeout: unknown request, using default timeout\n");
+	    if (chattyv2g) fprintf(stderr, "get_req_timeout: unknown request, using default timeout\n");
 	    return (uvlong)V2G_EVCC_Msg_Timeout_Default * TIME_SECOND;
 	}
 }
@@ -407,7 +545,7 @@ struct handletls_args_t{
 };
 
 // Bind the TLS listener to a dynamic port
-int bind_v2gport(uint16_t* port)
+int bind_v2gport(int* port)
 {
     int err;
     struct sockaddr_in6 bound_laddr;
@@ -418,13 +556,13 @@ int bind_v2gport(uint16_t* port)
     };
     int sock = socket(AF_INET6, SOCK_STREAM, 0);
     if( sock < 0 ) {
-        perror("socket");
+        if (chattyv2g) fprintf(stderr, "%s: %m\n", "socket");
         return -1;
     }
     memcpy( laddr.sin6_addr.s6_addr, SECC_LOCALHOST_ADDR, 16 );
     if( listen( sock, 127 ) < 0 ) {
         close( sock );
-        perror("listen");
+        if (chattyv2g) fprintf(stderr, "%s: %m\n", "listen");
         return -1;
     }
     // === Set the dynamic port number if called with pointer ===
@@ -432,10 +570,10 @@ int bind_v2gport(uint16_t* port)
         err = getsockname( sock, (struct sockaddr*) &bound_laddr, &bound_laddr_len );
         if( err < 0 ) {
             close( sock );
-            perror("getsockname");
+            if (chattyv2g) fprintf(stderr, "%s: %m\n", "getsockname");
             return -1;
         }
-        *port = ntohs( bound_laddr.sin6_port );
+        *port = (int)ntohs( bound_laddr.sin6_port );
     }
     return sock;
 }
@@ -460,28 +598,28 @@ int handle_handshake( comboconn_t* cconn, Chan* tc )
     // === Wait for request header ===
     err = comboreadn(cconn, buf, V2GTP_HEADER_LENGTH, tc);
     if (err != 0){
-        printf("handle_handshake: sslreadn error\n");
+        if (chattyv2g) fprintf(stderr, "handle_handshake: sslreadn error\n");
         return -1;
     }
     err = read_v2gtpHeader(buf, &payload_len);
     if (err != 0) {
-        printf("handle_handshake: invalid v2gtp header\n");
+        if (chattyv2g) fprintf(stderr, "handle_handshake: invalid v2gtp header\n");
         return -1;
     }
     if (payload_len + V2GTP_HEADER_LENGTH > BUFFER_SIZE) {
-        printf("Buffer too small for request\n");
+        if (chattyv2g) fprintf(stderr, "Buffer too small for request\n");
         return -1;
     }
     // === Read handshake request ===
     err = comboreadn(cconn, buf + V2GTP_HEADER_LENGTH, payload_len, tc);
     if  (err != 0) {
-        printf("handle_handshake: sslreadn error\n");
+        if (chattyv2g) fprintf(stderr, "handle_handshake: sslreadn error\n");
         return -1;
     }
     buffer_pos = V2GTP_HEADER_LENGTH;
     err = decode_appHandExiDocument(&stream, &handshake_req);
     if (err != 0) {
-        printf("handle_handshake error: decode_appHandExiDocument\n");
+        if (chattyv2g) fprintf(stderr, "handle_handshake error: decode_appHandExiDocument\n");
         return -1;
     }
     // === Validate handshake request ===
@@ -495,7 +633,7 @@ int handle_handshake( comboconn_t* cconn, Chan* tc )
         }
     }
     if (err != 0) {
-        printf("handle_handshake: no supported protocols found\n");
+        if (chattyv2g) fprintf(stderr, "handle_handshake: no supported protocols found\n");
         return -1;
     }
     // === Create response EXI document ===
@@ -508,18 +646,18 @@ int handle_handshake( comboconn_t* cconn, Chan* tc )
 	stream.capacity = 8; // as it should be for send
 	err = encode_appHandExiDocument(&stream, &handshake_resp);
 	if (err != 0) {
-	    printf("handle_handshake: error encoding handshake response\n");
+	    if (chattyv2g) fprintf(stderr, "handle_handshake: error encoding handshake response\n");
 	    return -1;
 	}
 	// === Write response ===
 	err = write_v2gtpHeader(buf, buffer_pos-V2GTP_HEADER_LENGTH, V2GTP_EXI_TYPE);
 	if (err != 0) {
-	    printf("handle_handshake: error writing response header\n");
+	    if (chattyv2g) fprintf(stderr, "handle_handshake: error writing response header\n");
         return -1;
 	}
 	err = combowriten(cconn, buf, (unsigned int)buffer_pos, tc);
     if (err != 0) {
-        printf("handle_handshake: sslwriten failed\n");
+        if (chattyv2g) fprintf(stderr, "handle_handshake: sslwriten failed\n");
         return -1;
     }
     return 0;
@@ -544,49 +682,49 @@ int secc_handle_request(comboconn_t* cconn, Chan* tc,
     tchanset(tc, (uvlong)V2G_SECC_Sequence_Timeout * TIME_SECOND);
     err = comboreadn(cconn, buf, V2GTP_HEADER_LENGTH, tc);
     if (err != 0) {
-        printf("secc_handle_request: sslreadn error\n");
+        if (chattyv2g) fprintf(stderr, "secc_handle_request: sslreadn error\n");
         return -1;
     }
     err = read_v2gtpHeader( buf, &payload_len);
     if (err != 0) {
-        printf("secc_handle_request error: read_v2gtpHeader\n");
+        if (chattyv2g) fprintf(stderr, "secc_handle_request error: read_v2gtpHeader\n");
         return -1;
     }
     if (payload_len + V2GTP_HEADER_LENGTH > BUFFER_SIZE) {
-        printf("secc_handle_request error: Buffer too small for request\n");
+        if (chattyv2g) fprintf(stderr, "secc_handle_request error: Buffer too small for request\n");
         return -1;
     }
     err = comboreadn(cconn, buf + V2GTP_HEADER_LENGTH, payload_len, tc);
     if (err != 0) {
-        printf("secc_handle_request error: sslreadn\n");
+        if (chattyv2g) fprintf(stderr, "secc_handle_request error: sslreadn\n");
         return -1;
     }
     struct v2gEXIDocument exi_in;
     struct v2gEXIDocument exi_out;
     err = deserializeStream2EXI(&stream, &exi_in);
     if (err != 0) {
-        printf("secc_handle_request: handle decoding error\n");
+        if (chattyv2g) fprintf(stderr, "secc_handle_request: handle decoding error\n");
         return -1;
     }
     // === Call the user-defined handle function ===
     err = handle_func( &exi_in, &exi_out );
     if (err != 0) {
-        printf("secc_handle_request: external handle_func returned error\n");
+        if (chattyv2g) fprintf(stderr, "secc_handle_request: external handle_func returned error\n");
         return -1;
     }
     stream.capacity = 8;
     err = serializeEXI2Stream(&exi_out, &stream);
     if (err != 0) {
-        printf("secc_handle_request: invalid response, unable to encode\n");
+        if (chattyv2g) fprintf(stderr, "secc_handle_request: invalid response, unable to encode\n");
         return -1;
     }
     //=== Write response ===
     err = combowriten(cconn, buf, (unsigned int) *stream.pos, tc);
     if (err != 0) {
-        printf( "secc_handle_request: sslwriten failed\n");
+        if (chattyv2g) fprintf(stderr,  "secc_handle_request: sslwriten failed\n");
         return -1;
     }
-    printf( "Succesful request\n");
+    if (chattyv2g) fprintf(stderr,  "Succesful request\n");
     return 0;
 }
 
@@ -611,13 +749,13 @@ void secc_handle_tcp( void* vargs )
     rendez(vargs, NULL);
     err = tchaninit(&tc);
     if (err != 0) {
-        printf("secc_handle_tcp: tchaninit error\n");
+        if (chattyv2g) fprintf(stderr, "secc_handle_tcp: tchaninit error\n");
         goto exit;
     }
     tchanset(&tc, (uvlong)V2G_SECC_Sequence_Timeout * TIME_SECOND);
     err = handle_handshake( &cconn, &tc );
     if (err != 0) {
-        printf("secc_handle_tcp error: handle_handshake");
+        if (chattyv2g) fprintf(stderr, "secc_handle_tcp error: handle_handshake");
         goto exit;
     }
     for(;;) {
@@ -657,14 +795,14 @@ void secc_handle_tls( void* arg )
                         (const unsigned char *)pers,
                         strlen( pers ));
     if (err != 0) {
-        printf("failed\n  ! ctr_drbg_init returned %d\n", err );
+        if (chattyv2g) fprintf(stderr, "failed\n  ! ctr_drbg_init returned %d\n", err );
         goto exit;
     }
     // === Setup ssl connection ===
-    printf("init ssl connection\n");
+    if (chattyv2g) fprintf(stderr, "init ssl connection\n");
     err = ssl_init(ssl);
     if( err != 0 ) {
-        printf("failed\n  ! ssl_init returned %d\n\n", err );
+        if (chattyv2g) fprintf(stderr, "failed\n  ! ssl_init returned %d\n\n", err );
         goto exit;
     }
     ssl_set_endpoint(ssl, SSL_IS_SERVER);
@@ -682,30 +820,30 @@ void secc_handle_tls( void* arg )
                            ssl_cache_set, &tlsp->cache );
     ssl_set_ca_chain(ssl, tlsp->srvcert.next, NULL, NULL);
     if ((err = ssl_set_own_cert(ssl, &tlsp->srvcert, &tlsp->pkey)) != 0) {
-        printf( " failed\n  ! ssl_set_own_cert returned %d\n\n", err );
+        if (chattyv2g) fprintf(stderr,  " failed\n  ! ssl_set_own_cert returned %d\n\n", err );
         goto exit;
     }
 
     ssl_set_ciphersuites(ssl, V2G_CIPHER_SUITES);
     // === Perform SSL handshake ===
-    printf("starting ssl handshake\n");
+    if (chattyv2g) fprintf(stderr, "starting ssl handshake\n");
     while ((err = ssl_handshake(ssl)) != 0) {
         if (err != POLARSSL_ERR_NET_WANT_READ &&
             err != POLARSSL_ERR_NET_WANT_WRITE) {
-            printf("failed\n  ! ssl_handshake returned %d\n\n", err );
+            if (chattyv2g) fprintf(stderr, "failed\n  ! ssl_handshake returned %d\n\n", err );
             goto exit;
         }
     }
     err = tchaninit(&tc);
     if (err != 0) {
-        printf("secc_handle_tls: tchaninit error\n");
+        if (chattyv2g) fprintf(stderr, "secc_handle_tls: tchaninit error\n");
         goto exit;
     }
     tchanset(&tc, (uvlong)V2G_SECC_Sequence_Timeout * TIME_SECOND);
     close_notify = true;
     err = handle_handshake( &cconn, &tc );
     if (err != 0) {
-        printf("secc_handle_tls error: handle_handshake");
+        if (chattyv2g) fprintf(stderr, "secc_handle_tls error: handle_handshake");
         goto exit;
     }
     for(;;) {
@@ -726,7 +864,7 @@ void secc_handle_tls( void* arg )
     }
     ctr_drbg_free(&ctr_drbg);
     ssl_free(ssl);
-    printf("closing connection to client\n");
+    if (chattyv2g) fprintf(stderr, "closing connection to client\n");
 }
 
 typedef struct{
@@ -747,13 +885,13 @@ void secc_listen_tcp_child(void* vargs)
         // === Wait for a connection ===
         handle_args.sockfd = accept(sockfd, (struct sockaddr*) &raddr, &raddr_len);
         if (handle_args.sockfd < 0) {
-            perror("accept");
+            if (chattyv2g) fprintf(stderr, "%s: %m\n", "accept");
             return;
         }
-        printf("accepted connection\n");
+        if (chattyv2g) fprintf(stderr, "accepted connection\n");
         err = threadcreate(secc_handle_tcp, &handle_args, 1024 * 1024);
         if (err < 0) {
-            perror("threadcreate");
+            if (chattyv2g) fprintf(stderr, "%s: %m\n", "threadcreate");
             abort();
         };
         rendez(&handle_args, NULL);
@@ -770,7 +908,7 @@ void secc_listen_tls_child(void* vargs)
     struct tls_global_params_t* tlsp;
     tlsp = (struct tls_global_params_t*)malloc(sizeof(struct tls_global_params_t));
     if (tlsp == NULL) {
-        perror("secc_listen_tls, malloc error\n");
+        if (chattyv2g) fprintf(stderr, "%s: %m\n", "secc_listen_tls, malloc error");
         rendez(vargs, NULL);
         return;
     }
@@ -780,7 +918,7 @@ void secc_listen_tls_child(void* vargs)
     entropy_init(&tlsp->entropy);
     err = entropy_gather(&tlsp->entropy);
     if (err != 0) {
-        printf("secc_listen_tls, entropy gather error\n");
+        if (chattyv2g) fprintf(stderr, "secc_listen_tls, entropy gather error\n");
         rendez(vargs, NULL);
         return ;
     }
@@ -789,33 +927,33 @@ void secc_listen_tls_child(void* vargs)
     // === Parse certificate and .key file ===
     err = x509_crt_parse_file(&tlsp->srvcert, listen_args->crt_path);
     if (err != 0) {
-        printf(" failed\n  !  x509_crt_parse returned %d\n\n", err);
+        if (chattyv2g) fprintf(stderr, " failed\n  !  x509_crt_parse returned %d\n\n", err);
         rendez(vargs, NULL);
         return ;
     }
     err = pk_parse_keyfile( &tlsp->pkey, listen_args->key_path, NULL);
     if (err != 0) {
-        printf(" failed\n  !  pk_parse_key returned %d\n\n", err);
+        if (chattyv2g) fprintf(stderr, " failed\n  !  pk_parse_key returned %d\n\n", err);
         rendez(vargs, NULL);
         return ;
     }
     handle_args.global = tlsp;
     rendez(vargs, NULL);
     // === TLS listen loop ===
-    printf("start TLS listen\n");
+    if (chattyv2g) fprintf(stderr, "start TLS listen\n");
     for (;;) {
         struct sockaddr_in6 raddr;
         unsigned int raddr_len = sizeof( raddr);
         // === Wait for a connection ===
         handle_args.fd = accept(sockfd, (struct sockaddr*) &raddr, &raddr_len);
         if (handle_args.fd < 0) {
-            perror("accept");
+            if (chattyv2g) fprintf(stderr, "%s: %m\n", "accept");
             return ;
         }
-        printf("accepted connection\n");
+        if (chattyv2g) fprintf(stderr, "accepted connection\n");
         err = threadcreate(secc_handle_tls, &handle_args, 1024 * 1024);
         if (err < 0) {
-            perror("threadcreate");
+            if (chattyv2g) fprintf(stderr, "%s: %m\n", "threadcreate");
             abort();
         };
         rendez(&handle_args, NULL);
@@ -856,22 +994,22 @@ void secc_listen_tls(int sockfd,
 // Push a request to the pending request queue
 void push_blocking_request( struct ev_tls_conn_t* conn, struct ev_blocking_request_t* breq )
 {
-    //printf("push request\n");
+    //if (chattyv2g) fprintf(stderr, "push request\n");
     if( conn->last_req == NULL ) {
         conn->first_req = breq;
         conn->last_req = breq;
     } else {
         conn->last_req->next = breq;
     }
-    //printf("done pushing request\n");
+    //if (chattyv2g) fprintf(stderr, "done pushing request\n");
 }
 
 // Pop a request from the pending request queue
 int pop_blocking_request( struct ev_tls_conn_t* conn, struct ev_blocking_request_t** breq )
 {
-    //printf("pop request\n");
+    //if (chattyv2g) fprintf(stderr, "pop request\n");
     if( conn->first_req == NULL ) {
-        printf("pop_blocking_request error: no blocking requests");
+        if (chattyv2g) fprintf(stderr, "pop_blocking_request error: no blocking requests");
         return -1;
     }
     *breq = conn->first_req;
@@ -881,7 +1019,7 @@ int pop_blocking_request( struct ev_tls_conn_t* conn, struct ev_blocking_request
     } else {
         conn->first_req = (*breq)->next;
     }
-    //printf("done popping request\n");
+    //if (chattyv2g) fprintf(stderr, "done popping request\n");
     return 0;
 }
 
@@ -903,13 +1041,13 @@ ssize_t v2g_raw_request( struct ev_tls_conn_t* conn, byte* buffer,
     Alt alts[3];
     err = tchaninit(&tc);
     if (err != 0) {
-        printf("v2g_raw_request: tchaninit error\n");
+        if (chattyv2g) fprintf(stderr, "v2g_raw_request: tchaninit error\n");
         return -1;
     }
     tchanset(&tc, timeout_ns);
     qlock( &conn->mutex );
     if( !conn->alive ) {
-        printf("v2g_raw_request: cannot send request, connection dead\n");
+        if (chattyv2g) fprintf(stderr, "v2g_raw_request: cannot send request, connection dead\n");
         conn->alive = false;
         qunlock( &conn->mutex );
         evcc_kill_conn(conn);
@@ -918,7 +1056,7 @@ ssize_t v2g_raw_request( struct ev_tls_conn_t* conn, byte* buffer,
     }
     err = combowriten( &conn->cconn, buffer, request_len, &tc );
     if( err != 0){
-        printf("v2g_raw_request: sslwriten\n");
+        if (chattyv2g) fprintf(stderr, "v2g_raw_request: sslwriten\n");
         conn->alive = false;
         qunlock( &conn->mutex );
         evcc_kill_conn(conn);
@@ -944,14 +1082,14 @@ ssize_t v2g_raw_request( struct ev_tls_conn_t* conn, byte* buffer,
         case 0:
             break;
         case 1:
-            printf("v2g_raw_request: timeout\n");
+            if (chattyv2g) fprintf(stderr, "v2g_raw_request: timeout\n");
             evcc_kill_conn(conn);
             // Wait until stream_reader is done to avoid race conditions
             chanrecv(&breq.wake_chan, &err);
             response_len = -1;
             break;
         default:
-            printf("critical error at v2g_raw_request: alt error\n");
+            if (chattyv2g) fprintf(stderr, "critical error at v2g_raw_request: alt error\n");
             abort();
     }
     chanfree(&tc);
@@ -991,43 +1129,43 @@ int v2g_handshake_request( struct ev_tls_conn_t* conn )
 
 
     if( (err = encode_appHandExiDocument(&stream, &handshake)) == 0) {
-        printf("====================\n");
+        if (chattyv2g) fprintf(stderr, "====================\n");
 		if ( write_v2gtpHeader(stream.data, buffer_pos-V2GTP_HEADER_LENGTH, V2GTP_EXI_TYPE) == 0 ) {
-			printf("EV side: send message to the EVSE\n");
+			if (chattyv2g) fprintf(stderr, "EV side: send message to the EVSE\n");
 		}
 	}
 	// === Commit request ===
-	printf("raw handshake request\n");
+	if (chattyv2g) fprintf(stderr, "raw handshake request\n");
 
     len = v2g_raw_request( conn, buffer, buffer_pos, BUFFER_SIZE,
                            V2G_EVCC_Msg_Timeout_SupportedAppProtocolReq * TIME_SECOND );
     if( len <= 0 ){
-        printf("v2g_handshake_request error: v2g_raw request\n");
+        if (chattyv2g) fprintf(stderr, "v2g_handshake_request error: v2g_raw request\n");
         return 0;
     }
     // === Handle response ===
-    printf("done with raw handhake request\n");
+    if (chattyv2g) fprintf(stderr, "done with raw handhake request\n");
     buffer_pos = 0;
     uint16_t payload_len;
     err = read_v2gtpHeader(stream.data, &payload_len);
     if( err != 0 ) {
-        printf("v2g_handshake_request error: read_v2gtpHeader\n");
+        if (chattyv2g) fprintf(stderr, "v2g_handshake_request error: read_v2gtpHeader\n");
         return -1;
     }
 	buffer_pos = V2GTP_HEADER_LENGTH;
     err = decode_appHandExiDocument(&stream, &handshake_resp);
     if( err != 0 ) {
-        printf("v2g_handshake_request error: decode_appHandExiDocument\n");
+        if (chattyv2g) fprintf(stderr, "v2g_handshake_request error: decode_appHandExiDocument\n");
         return -1;
     }
-		printf("EV side: Response of the EVSE \n");
+		if (chattyv2g) fprintf(stderr, "EV side: Response of the EVSE \n");
 	if( handshake_resp.supportedAppProtocolRes.ResponseCode
 	    != appHandresponseCodeType_OK_SuccessfulNegotiation) {
-	    printf("\t\tResponseCode=ERROR_UnsuccessfulNegotiation\n");
+	    if (chattyv2g) fprintf(stderr, "\t\tResponseCode=ERROR_UnsuccessfulNegotiation\n");
         return -1;
 	}
-	printf("\t\tResponseCode=OK_SuccessfulNegotiation\n");
-	printf( "\t\tSchemaID=%d\n",
+	if (chattyv2g) fprintf(stderr, "\t\tResponseCode=OK_SuccessfulNegotiation\n");
+	if (chattyv2g) fprintf(stderr,  "\t\tSchemaID=%d\n",
 		        handshake_resp.supportedAppProtocolRes.SchemaID);
 	return 0;
 }
@@ -1051,21 +1189,21 @@ int v2g_request( struct ev_tls_conn_t* conn, struct v2gEXIDocument* exiIn,
 	/* EV side */
 	err = serializeEXI2Stream( exiIn, &stream);
     if (err != 0) {
-        printf("v2g_request error: serializeEXI2Stream\n");
+        if (chattyv2g) fprintf(stderr, "v2g_request error: serializeEXI2Stream\n");
 	    return err;
 	}
     len = v2g_raw_request( conn, buffer, buffer_pos, BUFFER_SIZE, req_timeout );
     if (len <= 0) {
-        printf("v2g_request error: v2g_raw_request\n");
+        if (chattyv2g) fprintf(stderr, "v2g_request error: v2g_raw_request\n");
         return 0;
     }
     buffer_pos = 0;
     err = deserializeStream2EXI( &stream, exiOut);
     if (err != 0) {
-        printf("v2g_request error: deserializeStream2EXI\n");
+        if (chattyv2g) fprintf(stderr, "v2g_request error: deserializeStream2EXI\n");
         return 0;
     }
-   // printf("succesful v2g_request\n");
+   // if (chattyv2g) fprintf(stderr, "succesful v2g_request\n");
     return 0;
 }
 
@@ -1081,13 +1219,13 @@ static void evcc_connect_stream_reader( void* arg )
         err = comboreadn( &conn->cconn, header_buf,
                           V2GTP_HEADER_LENGTH, &conn->kill_chan );
         if( err < 0 ){
-            printf( "evcc_connect_tls_stream_reader error: sslreadn error\n");
+            if (chattyv2g) fprintf(stderr,  "evcc_connect_tls_stream_reader error: sslreadn error\n");
             break;
         }
         // === Check header for response size ===
         err = read_v2gtpHeader( header_buf, &payload_len);
         if( err != 0 ) {
-            printf("evcc_connect_tls_stream_reader error: invalid v2gtp header\n");
+            if (chattyv2g) fprintf(stderr, "evcc_connect_tls_stream_reader error: invalid v2gtp header\n");
             break;
         }
         qlock( &conn->mutex );
@@ -1095,28 +1233,28 @@ static void evcc_connect_stream_reader( void* arg )
         err = pop_blocking_request( conn, &breq );
 		if( err != 0){
 		    qunlock( &conn->mutex );
-            printf("evcc_connect_tls_stream_reader: pop_blocking_request error\n");
+            if (chattyv2g) fprintf(stderr, "evcc_connect_tls_stream_reader: pop_blocking_request error\n");
             break;
         }
         qunlock( &conn->mutex );
         if( payload_len + V2GTP_HEADER_LENGTH > breq->buffer_len ) {
             err = -1;
             chansend( &breq->wake_chan, &err );
-            printf("evcc_connect_tls_stream_reader error: Buffer too small for request\n");
+            if (chattyv2g) fprintf(stderr, "evcc_connect_tls_stream_reader error: Buffer too small for request\n");
             break;
         }
         err = comboreadn( &conn->cconn, breq->buffer + V2GTP_HEADER_LENGTH,
                         payload_len, &conn->kill_chan );
         if( err != 0 ) {
             chansend( &breq->wake_chan, &err );
-            printf("evcc_connect_tls_stream_reader error: sslreadn\n");
+            if (chattyv2g) fprintf(stderr, "evcc_connect_tls_stream_reader error: sslreadn\n");
             break;
         }
         memcpy( breq->buffer, header_buf, V2GTP_HEADER_LENGTH );
         len = V2GTP_HEADER_LENGTH + payload_len;
         chansend( &breq->wake_chan, &len );
     }
-    printf("disconnected\n");
+    if (chattyv2g) fprintf(stderr, "disconnected\n");
     qlock(&conn->mutex);
     conn->alive = false;
     err = -1;
@@ -1145,7 +1283,7 @@ int init_evcc_conn(struct ev_tls_conn_t* conn, bool tls_enabled) {
     }
     conn->cconn.tls_enabled = tls_enabled;
     if( conn->serverfd < 0 ) {
-        perror("socket");
+        if (chattyv2g) fprintf(stderr, "%s: %m\n", "socket");
         return -1;
     }
     return 0;
@@ -1158,7 +1296,7 @@ int evcc_connect_tcp( struct ev_tls_conn_t* conn )
     int err = 0;
     err = init_evcc_conn(conn, false);
     if (err != 0) {
-        printf("evcc_connect_tcp: init_evcc_conn\n");
+        if (chattyv2g) fprintf(stderr, "evcc_connect_tcp: init_evcc_conn\n");
         return -1;
     }
     // === Init ===
@@ -1166,22 +1304,22 @@ int evcc_connect_tcp( struct ev_tls_conn_t* conn )
     err = connect( conn->cconn.sockfd, (struct sockaddr*)&conn->addr,
                    sizeof( struct sockaddr_in6) );
     if( err != 0 ) {
-        perror("connect");
+        if (chattyv2g) fprintf(stderr, "evcc_connect_tcp connect: %m\n");
         goto exit;
     }
 	conn->alive = true;
     memset(&conn->mutex, 0, sizeof(conn->mutex));
     err = threadcreate( evcc_connect_stream_reader, conn, 1024 * 1024 );
     if( err != 0 ){
-        printf("threadcreate error");
+        if (chattyv2g) fprintf(stderr, "evcc_connect_tcp: threadcreate error");
         goto exit;
     }
     err = v2g_handshake_request( conn );
     if( err != 0 ){
-        printf("v2g handshake error\n");
+        if (chattyv2g) fprintf(stderr, "v2g handshake error\n");
         goto exit; // stuff is freed in stream reader
     }
-    printf("v2g handshake succesful\n");
+    if (chattyv2g) fprintf(stderr, "v2g handshake succesful\n");
     return 0;
     // === Only ends here if an error has happened ===
     exit:
@@ -1197,7 +1335,7 @@ int evcc_connect_tls( struct ev_tls_conn_t* conn,
     const char *pers = "secc_ssl_client";
     err = init_evcc_conn(conn, true);
     if (err != 0) {
-        printf("evcc_connect_tls: init_evcc_conn\n");
+        if (chattyv2g) fprintf(stderr, "evcc_connect_tls: init_evcc_conn\n");
         return -1;
     }
     // === Init ===
@@ -1213,24 +1351,24 @@ int evcc_connect_tls( struct ev_tls_conn_t* conn,
                          (const unsigned char *) pers,
                          strlen( pers ) );
     if( err != 0 ) {
-        printf("ctr_drbg_init error\n");
+        if (chattyv2g) fprintf(stderr, "ctr_drbg_init error\n");
         goto exit;
     }
     // === Parse certificate and .key file ===
     err = x509_crt_parse_file( &conn->cacert, crt_path );
     if( err != 0 ) {
-        printf( " evcc_connect_tls: x509_crt_parse returned %d\n\n", err );
+        if (chattyv2g) fprintf(stderr,  " evcc_connect_tls: x509_crt_parse returned %d\n\n", err );
         goto exit;
     }
     err = pk_parse_keyfile( &conn->pkey, key_path, NULL);
     if (err != 0) {
-        printf("evcc_connect_tls: pk_parse_key returned %d\n\n", err);
+        if (chattyv2g) fprintf(stderr, "evcc_connect_tls: pk_parse_key returned %d\n\n", err);
         goto exit;
     }
     err = connect( conn->serverfd, (struct sockaddr*)&conn->addr,
                    sizeof( struct sockaddr_in6) );
     if( err != 0 ) {
-        perror("evcc_connect_tls: connect\n");
+        if (chattyv2g) fprintf(stderr, "evcc_connect_tls connect: %m\n");
         goto exit;
     }
     // === init ssl ==
@@ -1249,7 +1387,7 @@ int evcc_connect_tls( struct ev_tls_conn_t* conn,
     ssl_set_ca_chain( &conn->cconn.ssl, &conn->cacert, NULL, "EVCC (client)" );
     err = ssl_set_own_cert(&conn->cconn.ssl, &conn->cacert, &conn->pkey);
     if (err != 0) {
-        printf( "evcc_connect_tls: ssl_set_own_cert returned %d\n\n", err );
+        if (chattyv2g) fprintf(stderr,  "evcc_connect_tls: ssl_set_own_cert returned %d\n\n", err );
         goto exit;
     }
     ssl_set_rng( &conn->cconn.ssl, ctr_drbg_random, &conn->ctr_drbg );
@@ -1261,44 +1399,44 @@ int evcc_connect_tls( struct ev_tls_conn_t* conn,
     {
         if( err != POLARSSL_ERR_NET_WANT_READ && err != POLARSSL_ERR_NET_WANT_WRITE )
         {
-            printf( "evcc_connect_tls: ssl_handshake returned -0x%x\n\n", err );
+            if (chattyv2g) fprintf(stderr,  "evcc_connect_tls: ssl_handshake returned -0x%x\n\n", err );
             goto exit;
         }
     }
     // === Check certificate validity ===
     if( ( err = ssl_get_verify_result( &conn->cconn.ssl ) ) != 0 ) {
-        printf( "evcc_connect_tls failed\n" );
+        if (chattyv2g) fprintf(stderr,  "evcc_connect_tls failed\n" );
 
         if( ( err & BADCERT_EXPIRED ) != 0 ) {
-            printf( "  ! server certificate has expired\n" );
+            if (chattyv2g) fprintf(stderr,  "  ! server certificate has expired\n" );
         }
         if( ( err & BADCERT_REVOKED ) != 0 ) {
-            printf( "  ! server certificate has been revoked\n" );
+            if (chattyv2g) fprintf(stderr,  "  ! server certificate has been revoked\n" );
         }
         if( ( err & BADCERT_CN_MISMATCH ) != 0 ) {
-            printf( "  ! CN mismatch (expected CN=%s)\n", "PolarSSL Server 1" );
+            if (chattyv2g) fprintf(stderr,  "  ! CN mismatch (expected CN=%s)\n", "PolarSSL Server 1" );
         }
         if( ( err & BADCERT_NOT_TRUSTED ) != 0 ) {
-            printf( "  ! self-signed or not signed by a trusted CA\n" );
+            if (chattyv2g) fprintf(stderr,  "  ! self-signed or not signed by a trusted CA\n" );
         }
-        printf( "\n" );
+        if (chattyv2g) fprintf(stderr,  "\n" );
     } else {
-        printf( " ok\n" );
+        if (chattyv2g) fprintf(stderr,  " ok\n" );
     }
 	conn->alive = true;
-	    printf("init mutex\n");
+	    if (chattyv2g) fprintf(stderr, "init mutex\n");
     memset(&conn->mutex, 0, sizeof(conn->mutex));
     err = threadcreate( evcc_connect_stream_reader, conn, 1024 * 1024 );
     if( err != 0 ){
-        printf("threadcreate error");
+        if (chattyv2g) fprintf(stderr, "threadcreate error");
         goto exit;
     }
     err = v2g_handshake_request( conn );
     if( err != 0 ){
-        printf("v2g handshake error\n");
+        if (chattyv2g) fprintf(stderr, "v2g handshake error\n");
         goto exit; // stuff is freed in stream reader
     }
-    printf("TLS handshake succesful\n");
+    if (chattyv2g) fprintf(stderr, "TLS handshake succesful\n");
     return 0;
     // === Only ends here if an error has happened ===
     exit:

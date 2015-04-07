@@ -1,9 +1,9 @@
-#include "v2gstack.h"
-#include "EXITypes.h"
-#include "v2gEXIDatatypes.h"
-#include "v2gEXIDatatypesEncoder.h"
-#include "xmldsigEXIDatatypes.h"
-#include "xmldsigEXIDatatypesEncoder.h"
+#include "nikolav2g.h"
+#include "OpenV2G/EXITypes.h"
+#include "OpenV2G/v2gEXIDatatypes.h"
+#include "OpenV2G/v2gEXIDatatypesEncoder.h"
+#include "OpenV2G/xmldsigEXIDatatypes.h"
+#include "OpenV2G/xmldsigEXIDatatypesEncoder.h"
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -412,7 +412,7 @@ static int handle_authorization(struct v2gEXIDocument* exiIn,
             .capacity = 8, // Set to 8 for send and 0 for recv
         };
         struct v2gEXIFragment auth_fragment;
-        byte digest[32];
+        uint8_t digest[32];
         init_v2gEXIFragment(&auth_fragment);
         auth_fragment.AuthorizationReq_isUsed = 1u;
         memcpy(&auth_fragment.AuthorizationReq, req, sizeof(*req));

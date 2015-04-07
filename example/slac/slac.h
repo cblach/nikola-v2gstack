@@ -78,8 +78,6 @@
  * changes with each pass and the EVSE does not;
  */
 
-typedef uint8_t byte;
-
 #define SLAC_AVLN_PEV 1
 #define SLAC_AVLN_EVSE 0
 
@@ -165,25 +163,25 @@ struct __attribute__((packed)) slac_session
 {
 	struct session * next;
 	struct session * prev;
-	byte RunID [SLAC_RUNID_LEN];
-	byte APPLICATION_TYPE;
-	byte SECURITY_TYPE;
-	byte RESP_TYPE;
-	byte NUM_SOUNDS;
-	byte TIME_OUT;
-	byte AAG [SLAC_GROUPS];
-	byte NumGroups;
-	byte MSOUND_TARGET [ETHER_ADDR_LEN];
-	byte FORWARDING_STA [ETHER_ADDR_LEN];
-	byte PEV_ID [SLAC_UNIQUE_ID_LEN];
-	//byte PEV_MAC [ETHER_ADDR_LEN];
-	byte EVSE_ID [SLAC_UNIQUE_ID_LEN];
-	byte EVSE_MAC [ETHER_ADDR_LEN];
-	byte RND [SLAC_UNIQUE_ID_LEN];
-	byte NMK [SLAC_NMK_LEN];
-	byte NID [SLAC_NID_LEN];
-	byte original_nmk [SLAC_NMK_LEN];
-	byte original_nid [SLAC_NID_LEN];
+	uint8_t RunID [SLAC_RUNID_LEN];
+	uint8_t APPLICATION_TYPE;
+	uint8_t SECURITY_TYPE;
+	uint8_t RESP_TYPE;
+	uint8_t NUM_SOUNDS;
+	uint8_t TIME_OUT;
+	uint8_t AAG [SLAC_GROUPS];
+	uint8_t NumGroups;
+	uint8_t MSOUND_TARGET [ETHER_ADDR_LEN];
+	uint8_t FORWARDING_STA [ETHER_ADDR_LEN];
+	uint8_t PEV_ID [SLAC_UNIQUE_ID_LEN];
+	//uint8_t PEV_MAC [ETHER_ADDR_LEN];
+	uint8_t EVSE_ID [SLAC_UNIQUE_ID_LEN];
+	uint8_t EVSE_MAC [ETHER_ADDR_LEN];
+	uint8_t RND [SLAC_UNIQUE_ID_LEN];
+	uint8_t NMK [SLAC_NMK_LEN];
+	uint8_t NID [SLAC_NID_LEN];
+	uint8_t original_nmk [SLAC_NMK_LEN];
+	uint8_t original_nid [SLAC_NID_LEN];
 	unsigned state;
 	unsigned sounds;
 	unsigned limit;
