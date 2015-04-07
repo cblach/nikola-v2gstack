@@ -14,8 +14,8 @@
 #include "polarssl/entropy.h"
 #include "polarssl/ctr_drbg.h"
 
-
-typedef struct ev_session{
+typedef struct ev_session ev_session_t;
+struct ev_session{
     uint64_t id;
     uint16_t charge_service_id;
     uint8_t challenge[16];
@@ -32,7 +32,7 @@ typedef struct ev_session{
         entropy_context entropy;
         ctr_drbg_context ctr_drbg;
     } contract;
-}ev_session_t;
+};
 
 //=========================================
 //            Utility Functions
@@ -261,7 +261,7 @@ void init_v2g_request(struct v2gEXIDocument *exiIn, ev_session_t *s)
 //=======================
 //  Request Definitions
 //=======================
-int session_request(struct ev_tls_conn_t *conn, ev_session_t *s)
+int session_request(evcc_conn_t *conn, ev_session_t *s)
 {
     int err;
     struct v2gEXIDocument exiIn;
@@ -294,7 +294,7 @@ int session_request(struct ev_tls_conn_t *conn, ev_session_t *s)
     return 0;
 }
 
-int service_discovery_request(struct ev_tls_conn_t *conn, ev_session_t *s)
+int service_discovery_request(evcc_conn_t *conn, ev_session_t *s)
 {
     int err;
     struct v2gEXIDocument exiIn;
@@ -326,7 +326,7 @@ int service_discovery_request(struct ev_tls_conn_t *conn, ev_session_t *s)
     return 0;
 }
 
-int payment_selection_request(struct ev_tls_conn_t *conn, ev_session_t *s)
+int payment_selection_request(evcc_conn_t *conn, ev_session_t *s)
 {
     int err;
     struct v2gEXIDocument exiIn;
@@ -360,7 +360,7 @@ int payment_selection_request(struct ev_tls_conn_t *conn, ev_session_t *s)
     return 0;
 }
 
-int payment_details_request(struct ev_tls_conn_t *conn, ev_session_t *s)
+int payment_details_request(evcc_conn_t *conn, ev_session_t *s)
 {
     int err;
     struct v2gEXIDocument exiIn;
@@ -406,7 +406,7 @@ int payment_details_request(struct ev_tls_conn_t *conn, ev_session_t *s)
     return 0;
 }
 
-int authorization_request(struct ev_tls_conn_t *conn, ev_session_t *s)
+int authorization_request(evcc_conn_t *conn, ev_session_t *s)
 {
     int err;
     struct v2gEXIDocument exiIn;
@@ -453,7 +453,7 @@ int authorization_request(struct ev_tls_conn_t *conn, ev_session_t *s)
     return 0;
 }
 
-int charge_parameter_request(struct ev_tls_conn_t *conn, ev_session_t *s)
+int charge_parameter_request(evcc_conn_t *conn, ev_session_t *s)
 {
     int err;
     struct v2gEXIDocument exiIn;
@@ -524,7 +524,7 @@ int charge_parameter_request(struct ev_tls_conn_t *conn, ev_session_t *s)
     return 0;
 }
 
-int power_delivery_request(struct ev_tls_conn_t *conn, ev_session_t *s)
+int power_delivery_request(evcc_conn_t *conn, ev_session_t *s)
 {
     int err;
     struct v2gEXIDocument exiIn;
@@ -608,7 +608,7 @@ int power_delivery_request(struct ev_tls_conn_t *conn, ev_session_t *s)
     return 0;
 }
 
-int charging_status_request(struct ev_tls_conn_t *conn, ev_session_t *s)
+int charging_status_request(evcc_conn_t *conn, ev_session_t *s)
 {
     int err;
     struct v2gEXIDocument exiIn;
@@ -634,7 +634,7 @@ int charging_status_request(struct ev_tls_conn_t *conn, ev_session_t *s)
     return 0;
 }
 
-int session_stop_request(struct ev_tls_conn_t *conn, ev_session_t *s)
+int session_stop_request(evcc_conn_t *conn, ev_session_t *s)
 {
     int err;
     struct v2gEXIDocument exiIn;
@@ -662,9 +662,9 @@ int session_stop_request(struct ev_tls_conn_t *conn, ev_session_t *s)
 
 void ev_example(const char *if_name)
 {
-    struct ev_tls_conn_t conn;
+    evcc_conn_t conn;
     ev_session_t s;
-    memset(&conn, 0, sizeof(struct ev_tls_conn_t));
+    memset(&conn, 0, sizeof(evcc_conn_t));
     memset(&s, 0, sizeof(s));
     int err;
     err = load_contract("certs/contract.key", &s);

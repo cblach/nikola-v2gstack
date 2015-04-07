@@ -36,10 +36,7 @@ static const uint8_t SDP_MULTICAST_ADDR[16] = {0xff, 0x02, 0, 0,
                                                0, 0, 0, 0,
                                                0, 0, 0, 0,
                                                0, 0, 0, 1};
-struct evse_sdp_listen_args{
-    char *if_name;
-    uint16_t tls_port;
-};
+
 typedef unsigned long long uvlong;
 
 static inline uvlong nsleep(uvlong ns)
@@ -127,17 +124,18 @@ int get_interface_ipv6_address(const char *if_name,
 //          EV (Client)
 //====================================
 
-typedef struct{
+typedef struct ioargs ioargs_t;
+struct ioargs{
     int sockfd;
     struct sockaddr_in6 *addr;
     byte security;
-} ioargs;
+};
 
 // === Slave function for the SDP client ===
 // === Attempts to send the SDP message SDP_MAX_TRIES (50) times
 // === using the multicast address provided on the provided socket===
 static ssize_t request_writer(void *args, atomic_int *cancel) {
-    ioargs *wargs = args;
+    ioargs_t *wargs = args;
     byte buf[SDP_HEADER_LEN+SDP_REQ_PAYLOAD_LEN];
     byte *payload = buf + SDP_HEADER_LEN;
     ssize_t sentsz;
@@ -173,7 +171,7 @@ static ssize_t request_writer(void *args, atomic_int *cancel) {
 // === Attempts to read unicast responses from an SDP server ===
 static ssize_t response_reader(void *args, atomic_int *cancel)
 {
-    ioargs *rargs = args;
+    ioargs_t *rargs = args;
     byte buf[512];
     byte *payload = buf + SDP_HEADER_LEN;
     int err;
@@ -225,7 +223,7 @@ int ev_sdp_discover_evse(const char *if_name,
                   { .c  = iocw, .v  = &ret, .op = CHANRECV },
                   { .op = CHANEND }};
     unsigned int if_index;
-    ioargs rargs, wargs;
+    ioargs_t rargs, wargs;
 	if (iocr == NULL || iocw == NULL) {
 	    if (chattyv2g) fprintf(stderr, "slac_sendrecvloop: iochan error\n");
 	    if (iocr != NULL) {
@@ -268,8 +266,8 @@ int ev_sdp_discover_evse(const char *if_name,
     wargs.sockfd = sock;
     wargs.addr = &dest;
     wargs.security = tls_enabled ? SDP_SECURITY_TLS : SDP_SECURITY_NONE;
-    iocall(iocr, &response_reader, &rargs, sizeof(ioargs));
-    iocall(iocw, &request_writer, &wargs, sizeof(ioargs));
+    iocall(iocr, &response_reader, &rargs, sizeof(ioargs_t));
+    iocall(iocw, &request_writer, &wargs, sizeof(ioargs_t));
     // === Receive responses from iocalls ===
     // === If the send channel times out, no SDP server has responded in time ===
     switch (alt(alts)) {

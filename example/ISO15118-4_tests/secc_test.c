@@ -58,7 +58,7 @@ int chattyv2g = 0;
 void threadmain(int argc,
        char *argv[])
 {
-    struct ev_tls_conn_t conn;
+    evcc_conn_t conn;
     ev_session_t ev_session;
     struct sockaddr_in6 secc_tlsaddr, secc_tcpaddr;
     int err, tls_port, tcp_port, n = 0;
@@ -78,7 +78,7 @@ void threadmain(int argc,
     } else {
         test_validate_port(&secc_tcpaddr);
     }
-    memset(&conn, 0, sizeof(struct ev_tls_conn_t));
+    memset(&conn, 0, sizeof(ev_tls_conn_t));
     printf("Test %d: TLS serving & 15118 Protocol Handshake\n", ++n);
     if (USE_TLS && secc_tlsaddr.sin6_port != 0) {
         memcpy(&conn.addr, &secc_tlsaddr, sizeof(conn.addr));

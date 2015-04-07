@@ -27,15 +27,20 @@ typedef int (*handle_func_t)(struct v2gEXIDocument*,
 void secc_listen_tls(int, handle_func_t, const char *crt_path, const char *key_path);
 void secc_listen_tcp(int, handle_func_t);
 int bind_v2gport();
-struct ev_blocking_request_t;
+typedef struct blocking_request blocking_request_t;
 
 // SECC connection Context that allows either for an fd or an ssl context
-typedef struct{
+
+typedef struct comboconn comboconn_t;
+struct comboconn{
     bool tls_enabled;
     int sockfd;
     ssl_context ssl;
-} comboconn_t;
-struct ev_tls_conn_t{
+
+};
+
+typedef struct evcc_conn evcc_conn_t;
+struct evcc_conn{
 	bool alive;
     struct sockaddr_in6 addr;
     bool tls_enabled;
@@ -43,8 +48,8 @@ struct ev_tls_conn_t{
     QLock mutex;
     Chan kill_chan;
     // The connection keeps a queue of waiting requests to respond in correct order.
-    struct ev_blocking_request_t *first_req;
-    struct ev_blocking_request_t *last_req;
+    blocking_request_t *first_req;
+    blocking_request_t *last_req;
 
     // TLS Only stuff Stored here due to cleanup:
     int serverfd;
@@ -54,10 +59,10 @@ struct ev_tls_conn_t{
     ctr_drbg_context ctr_drbg;
 };
 
-int evcc_connect_tls(struct ev_tls_conn_t *conn, const char *crt_path, const char *key_path);
-int evcc_connect_tcp(struct ev_tls_conn_t *conn);
+int evcc_connect_tls(evcc_conn_t *conn, const char *crt_path, const char *key_path);
+int evcc_connect_tcp(evcc_conn_t *conn);
 
-int v2g_request(struct ev_tls_conn_t *conn, struct v2gEXIDocument *exiIn, struct v2gEXIDocument *exiOut);
+int v2g_request(evcc_conn_t *conn, struct v2gEXIDocument *exiIn, struct v2gEXIDocument *exiOut);
 
 
 //==================
@@ -65,7 +70,8 @@ int v2g_request(struct ev_tls_conn_t *conn, struct v2gEXIDocument *exiIn, struct
 //==================
 enum session_status { SESSION_ACTIVE, SESSION_PAUSED, SESSION_TERMINATED };
 
-typedef struct{
+typedef struct secc_session session_t;
+struct secc_session{
     uint8_t evcc_id[6]; // EV mac address
     struct v2gSelectedServiceType services[v2gSelectedServiceListType_SelectedService_ARRAY_SIZE];
     v2gEnergyTransferModeType energy_transfer_mode;
@@ -87,7 +93,7 @@ typedef struct{
     QLock mutex;
     int refcount;
     enum session_status status;
-}session_t;
+};
 
 int gen_random_data(void *dest, size_t dest_len);
 int init_sessions();

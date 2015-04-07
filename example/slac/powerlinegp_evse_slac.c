@@ -3,13 +3,15 @@
 #include "multitask.h"
 
 typedef uint8_t byte;
+
+typedef struct plgp_slac_args plgp_slac_args_t;
 struct plgp_slac_args{
     const char *if_name;
     byte *evse_mac;
 };
 void plgp_slac_listen_blocking(void *vargs)
 {
-    struct plgp_slac_args *args = (struct plgp_slac_args*)vargs;
+    plgp_slac_args_t *args = (plgp_slac_args_t*)vargs;
     ethconn_t ethconn;
     byte buffer[ETH_FRAME_LEN];
     int err;
@@ -71,7 +73,7 @@ void plgp_slac_listen_blocking(void *vargs)
 }
 void plgp_slac_listen(const char *if_name, byte dest_mac_evse[6])
 {
-    struct plgp_slac_args args = {.if_name = if_name,
+    plgp_slac_args_t args = {.if_name = if_name,
                                   .evse_mac = dest_mac_evse};
     threadcreate(plgp_slac_listen_blocking, &args, 1024 * 1024);
     rendez(&args, NULL);

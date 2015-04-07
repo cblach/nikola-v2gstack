@@ -28,13 +28,6 @@ static inline uvlong nsleep(uvlong ns)
     return (r == 0) ? 0 : ((uvlong)left.tv_sec * TIME_SECOND + (uvlong)ts.tv_nsec);
 }
 
-typedef struct {
-    byte num_sounds;
-    byte time_out;
-
-}slac_session_t;
-
-
 void ethhomeplughdr (void *vbuf, uint8_t mmv, uint16_t mmtype)
 {
     byte *buf = vbuf;
@@ -63,7 +56,8 @@ int slac_verify_response(void *buf, uint8_t mmv, uint16_t mmtype)
     return 0;
 }
 
-struct slac_iosendloop_args{
+typedef struct iosendloop_args iosendloop_args_t;
+struct iosendloop_args{
     ethconn_t *ethconn;
     byte *ethframe;
     size_t framelen;
@@ -77,7 +71,7 @@ static ssize_t slac_iosendloop(void *vargs, atomic_int *cancel)
     int err;
     bool infloop = true;
     int i;
-    struct slac_iosendloop_args *args = (struct slac_iosendloop_args*)vargs;
+    iosendloop_args_t *args = (iosendloop_args_t*)vargs;
     if (args->max_tries > 0) {
         i = 0;
         infloop = false;
@@ -176,7 +170,7 @@ ssize_t slac_sendrecvloop(ethconn_t *ethconn, void *ethframe, size_t framelen,
                                   .ethframe = ethframe,
                                   .mmv = recv_mmv,
                                   .mmtype = recv_mmtype};
-    struct slac_iosendloop_args sargs = {.ethconn = ethconn,
+    iosendloop_args_t sargs = {.ethconn = ethconn,
                                   .ethframe = ethframe,
                                   .framelen = framelen,
                                   .senddelay_ns = senddelay_ns,

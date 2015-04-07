@@ -56,18 +56,28 @@ typedef uint8_t byte;
 #endif
 typedef unsigned long long uvlong;
 
-struct ev_blocking_request_t{
+// Defined in nicolav2g.h:
+// typedef struct blocking_request blocking_request_t;
+struct blocking_request {
     Chan wake_chan;
     byte *buffer; // Used both for request & response
     size_t buffer_len; // size of the underlying buffer
-    struct ev_blocking_request_t *next;
+    blocking_request_t *next;
 };
 
-typedef struct{
+typedef struct ssln_arg ssln_arg_t;
+struct ssln_arg {
     ssl_context *ssl;
     byte *buffer;
     unsigned int n;
-} ssln_arg;
+};
+
+typedef struct tcpn_arg tcpn_arg_t;
+struct tcpn_arg{
+    int sockfd;
+    byte *buffer;
+    unsigned int n;
+};
 
 
 
@@ -126,15 +136,10 @@ void print_ssl_read_err(int err)
 //======================================
 //            Non-SSL IO functions
 //======================================
-typedef struct{
-    int sockfd;
-    byte *buffer;
-    unsigned int n;
-} tcpn_arg;
 
 static ssize_t iocall_readn(void *vargs, atomic_int *cancel)
 {
-    tcpn_arg *args = vargs;
+    tcpn_arg_t *args = vargs;
     int bytes_read = 0;
     int tries = 0;
     int ret;
@@ -162,7 +167,7 @@ static ssize_t iocall_readn(void *vargs, atomic_int *cancel)
 
 static ssize_t iocall_writen(void *vargs, atomic_int *cancel)
 {
-    tcpn_arg *args = vargs;
+    tcpn_arg_t *args = vargs;
     int bytes_written = 0;
     int ret;
     while (bytes_written < args->n && atomic_load(cancel) == 0) {
@@ -183,7 +188,7 @@ static int readn(int sockfd, byte *buffer,
                   unsigned int n, Chan *tc)
 {
     Alt alts[3];
-    tcpn_arg args = {
+    tcpn_arg_t args = {
         .sockfd = sockfd,
         .buffer = buffer,
         .n = n,
@@ -224,7 +229,7 @@ static int writen(int sockfd, byte *buffer,
                    unsigned int n, Chan *tc)
 {
     Alt alts[3];
-    tcpn_arg args = {
+    tcpn_arg_t args = {
         .sockfd = sockfd,
         .buffer = buffer,
         .n = n,
@@ -265,7 +270,7 @@ static int writen(int sockfd, byte *buffer,
 //======================================
 static ssize_t iocall_sslreadn(void *vargs, atomic_int *cancel)
 {
-    ssln_arg *args = vargs;
+    ssln_arg_t *args = vargs;
     int bytes_read = 0;
     int tries = 0;
     int ret;
@@ -291,7 +296,7 @@ static ssize_t iocall_sslreadn(void *vargs, atomic_int *cancel)
 
 static ssize_t iocall_sslwriten(void *vargs, atomic_int *cancel)
 {
-    ssln_arg *args = vargs;
+    ssln_arg_t *args = vargs;
     int bytes_written = 0;
     int ret;
     while (bytes_written < args->n && atomic_load(cancel) == 0) {
@@ -311,7 +316,7 @@ static int sslreadn(ssl_context *ssl, byte *buffer,
                     unsigned int n, Chan *tc)
 {
     Alt alts[3];
-    ssln_arg args = {
+    ssln_arg_t args = {
         .ssl = ssl,
         .buffer = buffer,
         .n = n,
@@ -352,7 +357,7 @@ static int sslwriten(ssl_context *ssl, byte *buffer,
                      unsigned int n, Chan *tc)
 {
     Alt alts[3];
-    ssln_arg args = {
+    ssln_arg_t args = {
         .ssl = ssl,
         .buffer = buffer,
         .n = n,
@@ -992,8 +997,8 @@ void secc_listen_tls(int sockfd,
 //%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 // Push a request to the pending request queue
-void push_blocking_request(struct ev_tls_conn_t *conn,
-                           struct ev_blocking_request_t *breq)
+void push_blocking_request(evcc_conn_t *conn,
+                           blocking_request_t *breq)
 {
     //if (chattyv2g) fprintf(stderr, "push request\n");
     if (conn->last_req == NULL) {
@@ -1006,8 +1011,8 @@ void push_blocking_request(struct ev_tls_conn_t *conn,
 }
 
 // Pop a request from the pending request queue
-int pop_blocking_request (struct ev_tls_conn_t *conn,
-                          struct ev_blocking_request_t **breq)
+int pop_blocking_request (evcc_conn_t *conn,
+                          blocking_request_t **breq)
 {
     //if (chattyv2g) fprintf(stderr, "pop request\n");
     if (conn->first_req == NULL) {
@@ -1025,7 +1030,7 @@ int pop_blocking_request (struct ev_tls_conn_t *conn,
     return 0;
 }
 
-static void evcc_kill_conn (struct ev_tls_conn_t *conn)
+static void evcc_kill_conn (evcc_conn_t *conn)
 {
     int kill_sig = 0;
     chansendnb(&conn->kill_chan, &kill_sig);
@@ -1035,7 +1040,7 @@ static void evcc_kill_conn (struct ev_tls_conn_t *conn)
 }
 
 // Commit a raw (byte) request to a tls connection
-ssize_t v2g_raw_request(struct ev_tls_conn_t *conn, byte *buffer,
+ssize_t v2g_raw_request(evcc_conn_t *conn, byte *buffer,
                         size_t request_len, size_t buffer_len, uvlong timeout_ns)
 {
     int err;
@@ -1066,7 +1071,7 @@ ssize_t v2g_raw_request(struct ev_tls_conn_t *conn, byte *buffer,
         chanfree(&tc);
         return -1;
     }
-	struct ev_blocking_request_t breq = {
+	blocking_request_t breq = {
 		.buffer = buffer,
 		.buffer_len = buffer_len,
 		.next = NULL,
@@ -1100,7 +1105,7 @@ ssize_t v2g_raw_request(struct ev_tls_conn_t *conn, byte *buffer,
 }
 
 // Create a handshake request (exchanging app protocol versions)
-int v2g_handshake_request(struct ev_tls_conn_t *conn)
+int v2g_handshake_request(evcc_conn_t *conn)
 {
 	int err;
 	ssize_t len;
@@ -1174,7 +1179,7 @@ int v2g_handshake_request(struct ev_tls_conn_t *conn)
 }
 
 // Create a v2g request to the EVSE
-int v2g_request(struct ev_tls_conn_t *conn, struct v2gEXIDocument *exiIn,
+int v2g_request(evcc_conn_t *conn, struct v2gEXIDocument *exiIn,
                 struct v2gEXIDocument *exiOut) {
 //struct v2gEXIDocument *exiOut) {
 	int err;
@@ -1214,8 +1219,8 @@ int v2g_request(struct ev_tls_conn_t *conn, struct v2gEXIDocument *exiIn,
 static void evcc_connect_stream_reader(void *arg)
 {
 	int err, len;
-    struct ev_tls_conn_t *conn = arg;
-	struct ev_blocking_request_t *breq;
+    evcc_conn_t *conn = arg;
+	blocking_request_t  *breq;
 	byte header_buf[V2GTP_HEADER_LENGTH];
     for(;;) {
         uint16_t payload_len;
@@ -1276,7 +1281,7 @@ static void evcc_connect_stream_reader(void *arg)
     close(conn->serverfd);
 }
 
-int init_evcc_conn(struct ev_tls_conn_t *conn, bool tls_enabled) {
+int init_evcc_conn(evcc_conn_t *conn, bool tls_enabled) {
     conn->first_req = NULL;
     conn->last_req = NULL;
     if (tls_enabled) {
@@ -1294,7 +1299,7 @@ int init_evcc_conn(struct ev_tls_conn_t *conn, bool tls_enabled) {
 
 // Connect to an EVSE
 
-int evcc_connect_tcp (struct ev_tls_conn_t *conn)
+int evcc_connect_tcp (evcc_conn_t *conn)
 {
     int err = 0;
     err = init_evcc_conn(conn, false);
@@ -1331,7 +1336,7 @@ int evcc_connect_tcp (struct ev_tls_conn_t *conn)
     return -1;
 }
 
-int evcc_connect_tls(struct ev_tls_conn_t *conn,
+int evcc_connect_tls(evcc_conn_t *conn,
                      const char *crt_path, const char *key_path)
 {
     int err = 0;

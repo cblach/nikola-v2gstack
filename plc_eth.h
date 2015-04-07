@@ -33,14 +33,16 @@ static uint8_t ETH_LOCAL_ATHEROS_DEVICE[ETH_ALEN] = {0x00, 0xb0, 0x52, 0x00, 0x0
 
 #define SLAC_RES_DLINK_READY 0x0b06
 
-typedef struct {
+
+typedef struct v2gethconn ethconn_t;
+struct v2gethconn{
 	int sockfd;
 	int if_index;
 	uint8_t src_mac[6];
 //	byte dest_mac[6];
 	uint16_t protocol;
 //	struct sockaddr_ll rsaddr;
-} ethconn_t;
+};
 
 //=======================================0
 // Note that ALL receiving buffers must
