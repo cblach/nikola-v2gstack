@@ -43,7 +43,6 @@ typedef struct evcc_conn evcc_conn_t;
 struct evcc_conn{
 	bool alive;
     struct sockaddr_in6 addr;
-    bool tls_enabled;
     comboconn_t cconn; // Makes it possible for either TCP or TLS
     QLock mutex;
     Chan kill_chan;
@@ -52,7 +51,6 @@ struct evcc_conn{
     blocking_request_t *last_req;
 
     // TLS Only stuff Stored here due to cleanup:
-    int serverfd;
     x509_crt cacert;
     pk_context pkey;
     entropy_context entropy;
@@ -70,29 +68,14 @@ int v2g_request(evcc_conn_t *conn, struct v2gEXIDocument *exiIn, struct v2gEXIDo
 //==================
 enum session_status { SESSION_ACTIVE, SESSION_PAUSED, SESSION_TERMINATED };
 
+
 typedef struct secc_session session_t;
 struct secc_session{
-    uint8_t evcc_id[6]; // EV mac address
-    struct v2gSelectedServiceType services[v2gSelectedServiceListType_SelectedService_ARRAY_SIZE];
-    v2gEnergyTransferModeType energy_transfer_mode;
-    v2gpaymentOptionType payment_type;
-    struct v2gSAScheduleListType SAScheduleList;
-    bool SAScheduleList_isUsed;
-    uint8_t challenge[16];
-    bool verified;
-    struct{
-        bool valid_crt; // Before a contract can be valid, it must have a valid crt
-        //byte cert[v2gCertificateChainType_Certificate_BYTES_SIZE];
-        //size_t cert_len;
-        x509_crt crt;
-        ecdsa_context pubkey;
-    } contract;
-    // === DO NOT MANIPULATE THE FOLLOWING FIELDS ===
-    bool tls_enabled;
     uint64_t id;
     QLock mutex;
     int refcount;
     enum session_status status;
+    void *data;
 };
 
 int gen_random_data(void *dest, size_t dest_len);

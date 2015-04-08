@@ -97,7 +97,7 @@ session_t *session_lookup(uint64_t sessionid)
     return *sessionpp;
 }
 
-session_t *session_new(/*bool tls_enabled*/)
+session_t *session_new(size_t session_data_size)
 {
     union Key k;
     // Must be hex binary
@@ -110,11 +110,11 @@ session_t *session_new(/*bool tls_enabled*/)
     if (sessionpp == NULL) {
         return NULL;
     }
-    *sessionpp = malloc(sizeof(session_t));
+    *sessionpp = malloc(sizeof(session_t) + session_data_size);
     if (*sessionpp == NULL) {
         return NULL;
     }
-    memset(*sessionpp, 0, sizeof(session_t));
+    memset(*sessionpp, 0, sizeof(session_t) + session_data_size);
     qunlock(&session_map_mutex);
    //(*sessionpp)->tls_enabled = tls_enabled;
     (*sessionpp)->id = k.u64;

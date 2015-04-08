@@ -1277,20 +1277,16 @@ static void evcc_connect_stream_reader(void *arg)
     ssl_free(&conn->cconn.ssl);
     ctr_drbg_free(&conn->ctr_drbg);
     entropy_free(&conn->entropy);
-    shutdown(conn->serverfd, 2);
-    close(conn->serverfd);
+    shutdown(conn->cconn.sockfd, 2);
+    close(conn->cconn.sockfd);
 }
 
 int init_evcc_conn(evcc_conn_t *conn, bool tls_enabled) {
     conn->first_req = NULL;
     conn->last_req = NULL;
-    if (tls_enabled) {
-        conn->serverfd = socket(AF_INET6, SOCK_STREAM, 0);
-    } else {
-        conn->cconn.sockfd = socket(AF_INET6, SOCK_STREAM, 0);
-    }
+    conn->cconn.sockfd = socket(AF_INET6, SOCK_STREAM, 0);
     conn->cconn.tls_enabled = tls_enabled;
-    if (conn->serverfd < 0) {
+    if (conn->cconn.sockfd < 0) {
         if (chattyv2g) fprintf(stderr, "%s: %m\n", "socket");
         return -1;
     }
@@ -1331,8 +1327,8 @@ int evcc_connect_tcp (evcc_conn_t *conn)
     return 0;
     // === Only ends here if an error has happened ===
     exit:
-    shutdown(conn->serverfd, 2);
-    close(conn->serverfd);
+    shutdown(conn->cconn.sockfd, 2);
+    close(conn->cconn.sockfd);
     return -1;
 }
 
@@ -1373,7 +1369,7 @@ int evcc_connect_tls(evcc_conn_t *conn,
         if (chattyv2g) fprintf(stderr, "evcc_connect_tls: pk_parse_key returned %d\n\n", err);
         goto exit;
     }
-    err = connect(conn->serverfd, (struct sockaddr*)&conn->addr,
+    err = connect(conn->cconn.sockfd, (struct sockaddr*)&conn->addr,
                   sizeof(struct sockaddr_in6));
     if (err != 0) {
         if (chattyv2g) fprintf(stderr, "evcc_connect_tls connect: %m\n");
@@ -1400,8 +1396,8 @@ int evcc_connect_tls(evcc_conn_t *conn,
     }
     ssl_set_rng(&conn->cconn.ssl, ctr_drbg_random, &conn->ctr_drbg);
     ssl_set_dbg(&conn->cconn.ssl, my_debug, stdout);
-    ssl_set_bio(&conn->cconn.ssl, net_recv, &conn->serverfd,
-                net_send, &conn->serverfd);
+    ssl_set_bio(&conn->cconn.ssl, net_recv, &conn->cconn.sockfd,
+                net_send, &conn->cconn.sockfd);
     // === Perform SSL handshake ===
     while ((err = ssl_handshake(&conn->cconn.ssl)) != 0) {
         if (err != POLARSSL_ERR_NET_WANT_READ && err != POLARSSL_ERR_NET_WANT_WRITE)
@@ -1451,7 +1447,7 @@ int evcc_connect_tls(evcc_conn_t *conn,
     ssl_free(&conn->cconn.ssl);
     ctr_drbg_free(&conn->ctr_drbg);
     entropy_free(&conn->entropy);
-    shutdown(conn->serverfd, 2);
-    close(conn->serverfd);
+    shutdown(conn->cconn.sockfd, 2);
+    close(conn->cconn.sockfd);
     return -1;
 }

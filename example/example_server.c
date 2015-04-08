@@ -10,6 +10,27 @@
 #include <math.h>
 #include "polarssl/error.h"
 
+typedef struct session_data session_data_t;
+struct session_data {
+    uint8_t evcc_id[6]; // EV mac address
+    struct v2gSelectedServiceType services[v2gSelectedServiceListType_SelectedService_ARRAY_SIZE];
+    v2gEnergyTransferModeType energy_transfer_mode;
+    v2gpaymentOptionType payment_type;
+    struct v2gSAScheduleListType SAScheduleList;
+    bool SAScheduleList_isUsed;
+    uint8_t challenge[16];
+    bool verified;
+    bool charging;
+    bool tls_enabled;
+    struct{
+        bool valid_crt; // Before a contract can be valid, it must have a valid crt
+        //byte cert[v2gCertificateChainType_Certificate_BYTES_SIZE];
+        //size_t cert_len;
+        x509_crt crt;
+        ecdsa_context pubkey;
+    } contract;
+};
+
 const v2gEnergyTransferModeType ENERGY_TRANSFER_MODES[] =
 { 	v2gEnergyTransferModeType_AC_single_phase_core,
 	v2gEnergyTransferModeType_AC_three_phase_core,
@@ -21,21 +42,22 @@ x509_crt Trusted_contract_rootcert_chain;
 //      Utility Functions
 //==============================
 
-void init_v2g_response(struct v2gEXIDocument *exiIn, session_t *session)
+void init_v2g_response(struct v2gEXIDocument *exiOut, session_t *s)
 {
-    init_v2gEXIDocument(exiIn);
-	exiIn->V2G_Message_isUsed = 1u;
-	init_v2gMessageHeaderType(&exiIn->V2G_Message.Header);
-	// Set session id to 0
-	if (session == NULL) {
-	    memset(exiIn->V2G_Message.Header.SessionID.bytes, 0, 8);
+    init_v2gEXIDocument(exiOut);
+	exiOut->V2G_Message_isUsed = 1u;
+	init_v2gMessageHeaderType(&exiOut->V2G_Message.Header);
+	// Set s id to 0
+	if (s == NULL) {
+	    memset(exiOut->V2G_Message.Header.SessionID.bytes, 0, 8);
 	} else {
-	    memcpy(exiIn->V2G_Message.Header.SessionID.bytes, &session->id, 8);
+	    memcpy(exiOut->V2G_Message.Header.SessionID.bytes, &s->id, 8);
 	}
-	exiIn->V2G_Message.Header.SessionID.bytesLen = 8;
+	exiOut->V2G_Message.Header.SessionID.bytesLen = 8;
 //	exiIn->V2G_Message.Header.Notification_isUsed = 0u; /* no notification */
 //	exiIn->V2G_Message.Header.Signature_isUsed = 0u;
-    init_v2gBodyType(&exiIn->V2G_Message.Body);
+    init_v2gBodyType(&exiOut->V2G_Message.Body);
+	exiOut->V2G_Message_isUsed = 1u;
 }
 
 double phyval_to_seconds(struct v2gPhysicalValueType v)
@@ -79,18 +101,18 @@ int cmp_physical_values(struct v2gPhysicalValueType x, struct v2gPhysicalValueTy
     }
 }
 
-int verify_charging_profile(session_t *session, uint8_t tupleid, struct v2gChargingProfileType *profile)
+int verify_charging_profile(session_data_t *sd, uint8_t tupleid, struct v2gChargingProfileType *profile)
 {
     int i, j;
     uint n_profiles, n_pmax;
     struct v2gSAScheduleTupleType *tuple = NULL;
-    if (!session->SAScheduleList_isUsed) {
+    if (!sd->SAScheduleList_isUsed) {
         printf("session schedule list empty, accepting any charging profiles\n");
         return 0;
     }
-    for (i = 0; i < session->SAScheduleList.SAScheduleTuple.arrayLen; i++) {
-        if (tupleid == session->SAScheduleList.SAScheduleTuple.array[i].SAScheduleTupleID) {
-            tuple = &session->SAScheduleList.SAScheduleTuple.array[i];
+    for (i = 0; i < sd->SAScheduleList.SAScheduleTuple.arrayLen; i++) {
+        if (tupleid == sd->SAScheduleList.SAScheduleTuple.array[i].SAScheduleTupleID) {
+            tuple = &sd->SAScheduleList.SAScheduleTuple.array[i];
             break;
         }
     }
@@ -176,19 +198,16 @@ int verify_charging_profile(session_t *session, uint8_t tupleid, struct v2gCharg
 //             Request Handling
 //=============================================
 
-static int handle_session_setup(struct v2gEXIDocument *exiIn, struct v2gEXIDocument *exiOut, session_t *session)
+static int handle_session_setup(struct v2gEXIDocument *exiIn,
+                                struct v2gEXIDocument *exiOut,
+                                session_t *s, session_data_t *sd)
 {
     struct v2gSessionSetupResType *res = &exiOut->V2G_Message.Body.SessionSetupRes;
 /* generate an unique sessionID */
-    session =  session_new();
-    if (session == NULL) {
+    if (s == NULL) {
         printf("session creation error\n");
         return -1;
     }
-    printf("New Session id = %lu", session->id);
-    init_v2g_response(exiOut, session);
-    init_v2gSessionSetupResType(res);
-    exiOut->V2G_Message.Body.SessionSetupRes_isUsed = 1u;
     res->ResponseCode = v2gresponseCodeType_OK;
     res->EVSEID.characters[0] = 0;
     res->EVSEID.characters[1] = 20;
@@ -200,13 +219,10 @@ static int handle_session_setup(struct v2gEXIDocument *exiIn, struct v2gEXIDocum
 
 static int handle_service_discovery(struct v2gEXIDocument *exiIn,
                                     struct v2gEXIDocument *exiOut,
-                                    session_t *session)
+                                    session_t *s, session_data_t *sd)
 {
     struct v2gServiceDiscoveryResType *res = &exiOut->V2G_Message.Body.ServiceDiscoveryRes;
     // === Lookup session ===
-    init_v2g_response(exiOut, session);
-	exiOut->V2G_Message.Body.ServiceDiscoveryRes_isUsed = 1u;
-	init_v2gServiceDiscoveryResType(res);
 	res->ServiceList_isUsed = 0u;
 	printf("\t\t ServiceCategory=%d\n", exiIn->V2G_Message.Body.ServiceDiscoveryReq.ServiceCategory);
 
@@ -241,7 +257,7 @@ static int handle_service_discovery(struct v2gEXIDocument *exiIn,
 	res->PaymentOptionList.PaymentOption.array[0] = v2gpaymentOptionType_ExternalPayment; // EVSE handles the payment
 	res->PaymentOptionList.PaymentOption.array[1] = v2gpaymentOptionType_Contract;
 	res->PaymentOptionList.PaymentOption.arrayLen = 2;
-	if (session == NULL) {
+	if (s == NULL) {
         printf("unknown session\n");
         res->ResponseCode = v2gresponseCodeType_FAILED_UnknownSession;
         return 0;
@@ -251,19 +267,17 @@ static int handle_service_discovery(struct v2gEXIDocument *exiIn,
 
 static int payment_service_selection(struct v2gEXIDocument *exiIn,
                                      struct v2gEXIDocument *exiOut,
-                                     session_t *session)
+                                     session_t *s, session_data_t *sd)
 {
     struct v2gPaymentServiceSelectionReqType *req = &exiIn->V2G_Message.Body.PaymentServiceSelectionReq;
     struct v2gPaymentServiceSelectionResType *res = &exiOut->V2G_Message.Body.PaymentServiceSelectionRes;
-	init_v2g_response(exiOut, session);
-	exiOut->V2G_Message.Body.PaymentServiceSelectionRes_isUsed= 1u;
-	init_v2gPaymentServiceSelectionResType(res);
-    if (session == NULL) {
+    if (s == NULL) {
         printf("create_response_message error: session_lookup_exi\n");
 	    memset(res, 0, sizeof(*res));
         res->ResponseCode = v2gresponseCodeType_FAILED_UnknownSession;
         return 0;
     }
+    printf("hm1\n");
     switch (req->SelectedPaymentOption) {
     case v2gpaymentOptionType_ExternalPayment:
         printf("\t\t SelectedPaymentOption=ExternalPayment\n");
@@ -274,31 +288,30 @@ static int payment_service_selection(struct v2gEXIDocument *exiIn,
         res->ResponseCode = v2gresponseCodeType_FAILED_PaymentSelectionInvalid;
         return 0;
     }
+    printf("hm2 %p\n", sd);
     res->ResponseCode = v2gresponseCodeType_OK;
-    session->payment_type = req->SelectedPaymentOption;
+    sd->payment_type = req->SelectedPaymentOption;
+    printf("hm3\n");
     return 0;
 }
 
 static int handle_payment_detail(struct v2gEXIDocument *exiIn,
                                  struct v2gEXIDocument *exiOut,
-                                 session_t *session)
+                                 session_t *s, session_data_t *sd)
 {
     struct v2gPaymentDetailsReqType *req = &exiIn->V2G_Message.Body.PaymentDetailsReq;
     struct v2gPaymentDetailsResType *res = &exiOut->V2G_Message.Body.PaymentDetailsRes;
     int err, flags;
     unsigned int i;
-    init_v2g_response(exiOut, session);
-	exiOut->V2G_Message_isUsed = 1u;
-	exiOut->V2G_Message.Body.PaymentDetailsRes_isUsed = 1u;
-    if (session == NULL) {
+    if (s == NULL) {
     	memset(res, 0, sizeof(*res));
         res->ResponseCode = v2gresponseCodeType_FAILED_UnknownSession;
         printf("handle_payment_detail: unknown session\n");
         return 0;
     }
     // === For the contract certificate, the certificate chain should be checked ===
-    if (session->payment_type == v2gpaymentOptionType_Contract) {
-        err = x509_crt_parse(&session->contract.crt,
+    if (sd->payment_type == v2gpaymentOptionType_Contract) {
+        err = x509_crt_parse(&sd->contract.crt,
                              req->ContractSignatureCertChain.Certificate.bytes,
                              req->ContractSignatureCertChain.Certificate.bytesLen);
         if (err != 0) {
@@ -310,7 +323,7 @@ static int handle_payment_detail(struct v2gEXIDocument *exiIn,
         if (req->ContractSignatureCertChain.SubCertificates_isUsed) {
             for (i = 0; i < req->ContractSignatureCertChain.SubCertificates.Certificate.arrayLen; i++) {
 //	printf("%s\n %u %u\n", req->ContractSignatureCertChain.SubCertificates.Certificate.array[0].bytes, req->ContractSignatureCertChain.SubCertificates.Certificate.array[i].bytesLen, req->ContractSignatureCertChain.SubCertificates.Certificate.arrayLen);
-                err = x509_crt_parse(&session->contract.crt,
+                err = x509_crt_parse(&sd->contract.crt,
                                      req->ContractSignatureCertChain.SubCertificates.Certificate.array[i].bytes,
                                      req->ContractSignatureCertChain.SubCertificates.Certificate.array[i].bytesLen);
                 if (err != 0) {
@@ -324,7 +337,7 @@ static int handle_payment_detail(struct v2gEXIDocument *exiIn,
         }
         // Convert the public key in the certificate to an mbed TLS ECDSA public key
         // This also verifies that it's an ECDSA key and not an RSA key
-        err = ecdsa_from_keypair(&session->contract.pubkey, pk_ec(session->contract.crt.pk));
+        err = ecdsa_from_keypair(&sd->contract.pubkey, pk_ec(sd->contract.crt.pk));
         if (err != 0) {
             memset(res, 0, sizeof(*res));
             res->ResponseCode = v2gresponseCodeType_FAILED_CertChainError;
@@ -334,7 +347,7 @@ static int handle_payment_detail(struct v2gEXIDocument *exiIn,
             return 0;
         }
         // === Verify the retrieved contract ECDSA key against the root cert ===
-        err = x509_crt_verify(&session->contract.crt, &Trusted_contract_rootcert_chain,
+        err = x509_crt_verify(&sd->contract.crt, &Trusted_contract_rootcert_chain,
                               NULL, NULL, &flags, NULL, NULL);
         if (err != 0) {
             printf("handle_payment_detail: contract certificate verify problem, ");
@@ -358,10 +371,10 @@ static int handle_payment_detail(struct v2gEXIDocument *exiIn,
             res->ResponseCode = v2gresponseCodeType_FAILED_CertChainError;
             return 0;
         }
-        gen_random_data(session->challenge, 16);
-        memcpy(res->GenChallenge.bytes, session->challenge, 16);
+        gen_random_data(sd->challenge, 16);
+        memcpy(res->GenChallenge.bytes, sd->challenge, 16);
       	res->GenChallenge.bytesLen = 16;
-      	session->contract.valid_crt = true;
+      	sd->contract.valid_crt = true;
     }
     res->ResponseCode = v2gresponseCodeType_OK;
 	res->EVSETimeStamp = time(NULL);
@@ -370,25 +383,22 @@ static int handle_payment_detail(struct v2gEXIDocument *exiIn,
 
 static int handle_authorization(struct v2gEXIDocument *exiIn,
                                 struct v2gEXIDocument *exiOut,
-                                session_t *session)
+                                session_t *s, session_data_t *sd)
 {
     struct v2gAuthorizationReqType *req = &exiIn->V2G_Message.Body.AuthorizationReq;
     struct v2gAuthorizationResType *res = &exiOut->V2G_Message.Body.AuthorizationRes;
     int err;
-    init_v2g_response(exiOut, session);
-	exiOut->V2G_Message.Body.AuthorizationRes_isUsed = 1u;
-    init_v2gAuthorizationResType(res);
     res->EVSEProcessing = v2gEVSEProcessingType_Finished;
-    if (session == NULL) {
+    if (s == NULL) {
     	memset(res, 0, sizeof(*res));
         res->ResponseCode = v2gresponseCodeType_FAILED_UnknownSession;
         printf("handle_authorization: unknown session\n");
         return 0;
     }
-    if (session->payment_type == v2gpaymentOptionType_Contract &&
-        session->contract.valid_crt == true) {
+    if (sd->payment_type == v2gpaymentOptionType_Contract &&
+        sd->contract.valid_crt == true) {
         if (req->GenChallenge_isUsed == 0 || req->GenChallenge.bytesLen != 16
-            || memcmp(req->GenChallenge.bytes,session->challenge, 16) != 0) {
+            || memcmp(req->GenChallenge.bytes,sd->challenge, 16) != 0) {
             printf("handle_authorization: challenge invalid or not present\n");
             res->ResponseCode = v2gresponseCodeType_FAILED_ChallengeInvalid;
             return 0;
@@ -451,7 +461,7 @@ static int handle_authorization(struct v2gEXIDocument *exiIn,
             res->ResponseCode = v2gresponseCodeType_FAILED_SignatureError;
             return 0;
         }
-        err = ecdsa_read_signature(&session->contract.pubkey,
+        err = ecdsa_read_signature(&sd->contract.pubkey,
                                    digest, 32,
                                    sig->SignatureValue.CONTENT.bytes,
                                    sig->SignatureValue.CONTENT.bytesLen);
@@ -460,7 +470,7 @@ static int handle_authorization(struct v2gEXIDocument *exiIn,
             printf("invalid signature\n");
             return 0;
         }
-        session->verified = true;
+        sd->verified = true;
         printf("Succesful verification of signature!!!\n");
     } else {
         printf("handle_authorization: external payment not implemented");
@@ -473,16 +483,13 @@ static int handle_authorization(struct v2gEXIDocument *exiIn,
 
 static int handle_charge_parameters(struct v2gEXIDocument *exiIn,
                                     struct v2gEXIDocument *exiOut,
-                                    session_t *session)
+                                    session_t *s, session_data_t *sd)
 {
     struct v2gChargeParameterDiscoveryReqType *req = &exiIn->V2G_Message.Body.ChargeParameterDiscoveryReq;
     struct v2gChargeParameterDiscoveryResType *res = &exiOut->V2G_Message.Body.ChargeParameterDiscoveryRes;
     struct v2gSAScheduleTupleType *tuple;
     bool valid_mode = false;
     // === Lookup session ===
-    init_v2g_response(exiOut, session);
-	exiOut->V2G_Message.Body.ChargeParameterDiscoveryRes_isUsed = 1u;
-    init_v2gChargeParameterDiscoveryResType(res);
 	res->EVSEProcessing = v2gEVSEProcessingType_Finished;
 	res->AC_EVSEChargeParameter_isUsed = 1u;
 	res->DC_EVSEChargeParameter_isUsed = 0u;
@@ -495,12 +502,12 @@ static int handle_charge_parameters(struct v2gEXIDocument *exiIn,
 	res->AC_EVSEChargeParameter.EVSENominalVoltage.Multiplier = 0;
 	res->AC_EVSEChargeParameter.EVSENominalVoltage.Unit = v2gunitSymbolType_V;
 	res->AC_EVSEChargeParameter.EVSENominalVoltage.Value = 300;
-    if (session == NULL) {
+    if (s == NULL) {
         printf("create_response_message error: session_new\n");
         res->ResponseCode = v2gresponseCodeType_FAILED_UnknownSession;
         return 0;
     }
-    session->SAScheduleList_isUsed = 1;
+    sd->SAScheduleList_isUsed = 1;
 	res->SAScheduleList_isUsed = 1u;
     tuple = &res->SAScheduleList.SAScheduleTuple.array[0];
     res->SAScheduleList.SAScheduleTuple.arrayLen = 1;
@@ -555,8 +562,8 @@ static int handle_charge_parameters(struct v2gEXIDocument *exiIn,
     tuple->SalesTariff.SalesTariffEntry.array[1].RelativeTimeInterval.duration_isUsed =0;
     tuple->SalesTariff.SalesTariffEntry.arrayLen = 2;
     // === STore the schedule in the session ===
-    memcpy(&session->SAScheduleList, &res->SAScheduleList, sizeof(struct v2gSAScheduleListType));
-    if (!session->verified) {
+    memcpy(&sd->SAScheduleList, &res->SAScheduleList, sizeof(struct v2gSAScheduleListType));
+    if (!sd->verified) {
         printf("handle_charge_parameters: session not verified\n");
         res->ResponseCode = v2gresponseCodeType_FAILED_SequenceError;
         return 0;
@@ -570,7 +577,7 @@ static int handle_charge_parameters(struct v2gEXIDocument *exiIn,
     if (!valid_mode) {
         res->ResponseCode = v2gresponseCodeType_FAILED_WrongEnergyTransferMode;
     } else {
-        session->energy_transfer_mode = req->RequestedEnergyTransferMode;
+        sd->energy_transfer_mode = req->RequestedEnergyTransferMode;
         res->ResponseCode = v2gresponseCodeType_OK;
     }
     return 0;
@@ -578,40 +585,51 @@ static int handle_charge_parameters(struct v2gEXIDocument *exiIn,
 
 int handle_power_delivery(struct v2gEXIDocument *exiIn,
                           struct v2gEXIDocument *exiOut,
-                          session_t *session)
+                          session_t *s, session_data_t *sd)
 {
     struct v2gPowerDeliveryReqType *req = &exiIn->V2G_Message.Body.PowerDeliveryReq;
     struct v2gPowerDeliveryResType *res = &exiOut->V2G_Message.Body.PowerDeliveryRes;
     int err;
-    init_v2g_response(exiOut, session);
-	exiOut->V2G_Message_isUsed = 1u;
-	exiOut->V2G_Message.Body.PowerDeliveryRes_isUsed = 1u;
 	res->AC_EVSEStatus.RCD=0;
 	res->AC_EVSEStatus.EVSENotification=3;
 	res->AC_EVSEStatus.NotificationMaxDelay=12;
 	res->AC_EVSEStatus_isUsed = 1;
 	res->DC_EVSEStatus_isUsed = 0;
-    if (session == NULL) {
+    if (s == NULL) {
         printf("handle_power_delivery: unknown session\n");
         res->ResponseCode = v2gresponseCodeType_FAILED_UnknownSession;
         return 0;
     }
-    if (!session->verified) {
+    if (!sd->verified) {
         printf("handle_power_delivery: session not verified\n");
         res->ResponseCode = v2gresponseCodeType_FAILED_SequenceError;
         return 0;
     }
     if (req->DC_EVPowerDeliveryParameter_isUsed) {
         printf("invalid charging mode: DC not available\n");
-        return -1;
+        res->ResponseCode = v2gresponseCodeType_FAILED_WrongEnergyTransferMode;
+        return 0;
     }
-    if (req->ChargingProfile_isUsed) {
-        err = verify_charging_profile(session, req->SAScheduleTupleID, &req->ChargingProfile);
-        if (err != 0) {
-            res->ResponseCode = v2gresponseCodeType_FAILED_ChargingProfileInvalid;
-            return 0;
+    // === Act based on which charge progress is selected ===
+    switch (req->ChargeProgress) {
+    case v2gchargeProgressType_Start:
+        if (req->ChargingProfile_isUsed) {
+            err = verify_charging_profile(sd, req->SAScheduleTupleID, &req->ChargingProfile);
+            if (err != 0) {
+                res->ResponseCode = v2gresponseCodeType_FAILED_ChargingProfileInvalid;
+                return 0;
+            }
+            printf("handle_power_delivery: Charging profile verified\n");
         }
-        printf("handle_power_delivery: Charging profile verified\n");
+        sd->charging = true;
+        break;
+    case v2gchargeProgressType_Stop:
+        sd->charging = false;
+        break;
+    case v2gchargeProgressType_Renegotiate:
+        break;
+    default:
+        return -1;
     }
 	res->ResponseCode = v2gresponseCodeType_OK;
 
@@ -620,20 +638,17 @@ int handle_power_delivery(struct v2gEXIDocument *exiIn,
 
 int handle_charging_status(struct v2gEXIDocument *exiIn,
                            struct v2gEXIDocument *exiOut,
-                           session_t *session)
+                           session_t *s, session_data_t *sd)
 {
    // struct v2gChargingStatusReqType *req = &exiIn->V2G_Message.Body.ChargingStatusReq;
     struct v2gChargingStatusResType *res = &exiOut->V2G_Message.Body.ChargingStatusRes;
-    init_v2g_response(exiOut, session);
-	exiOut->V2G_Message_isUsed = 1u;
-	exiOut->V2G_Message.Body.ChargingStatusRes_isUsed = 1u;
-    if (session == NULL) {
+    if (s == NULL) {
         printf("handle_charging_status: unknown sessio \n");
         memset(res, 0, sizeof(*res));
         res->ResponseCode = v2gresponseCodeType_FAILED_UnknownSession;
         return 0;
     }
-    if (!session->verified) {
+    if (!sd->verified) {
         printf("handle_charging_status: session not verified\n");
         res->ResponseCode = v2gresponseCodeType_FAILED_SequenceError;
         return 0;
@@ -668,20 +683,17 @@ int handle_charging_status(struct v2gEXIDocument *exiIn,
 
 static int handle_session_stop(struct v2gEXIDocument *exiIn,
                                struct v2gEXIDocument *exiOut,
-                               session_t *session)
+                               session_t *s, session_data_t *sd)
 {
     struct v2gSessionStopReqType *req = &exiIn->V2G_Message.Body.SessionStopReq;
     struct v2gSessionStopResType *res = &exiOut->V2G_Message.Body.SessionStopRes;
-	exiOut->V2G_Message_isUsed = 1u;
-	init_v2gBodyType(&exiOut->V2G_Message.Body);
-	exiOut->V2G_Message.Body.SessionStopRes_isUsed = 1u;
-    if (session == NULL) {
+    if (s == NULL) {
         printf("handle_session_stop: unknown session\n");
         res->ResponseCode = v2gresponseCodeType_FAILED_UnknownSession;
         return -1;
     }
     if (req->ChargingSession == v2gchargingSessionType_Terminate) {
-        session_terminate(session);
+        session_terminate(s);
     }
 	/* Prepare data for EV */
 
@@ -691,60 +703,84 @@ static int handle_session_stop(struct v2gEXIDocument *exiIn,
 
 static int create_response_message(struct v2gEXIDocument *exiIn, struct v2gEXIDocument *exiOut) {
 	int err = -1;//ERROR_UNEXPECTED_REQUEST_MESSAGE;
-    session_t *session;
+    session_t *s;
+    session_data_t *sd;
 	/* create response message as EXI document */
 	printf("ismessage %u, issessionsetup %u\n", exiIn->V2G_Message_isUsed, exiIn->V2G_Message.Body.SessionSetupReq_isUsed);
-	if (exiIn->V2G_Message_isUsed) {
-	    session = session_lookup_exi(exiIn);
-	    session_lock(session);
-		init_v2gEXIDocument(exiOut);
-		if (exiIn->V2G_Message.Body.SessionSetupReq_isUsed) {
-		    printf("Handling session setup request\n");
-			err = handle_session_setup(exiIn, exiOut, session);
-		} else if (exiIn->V2G_Message.Body.ServiceDiscoveryReq_isUsed) {
-			//errn = serviceDiscovery(exiIn, exiOut);
-			printf("Handling service discovery request\n");
-			err = handle_service_discovery(exiIn, exiOut, session);
-		} else if (exiIn->V2G_Message.Body.ServiceDetailReq_isUsed) {
-		    printf("No service detail request\n");
-		    err = -1;
-			//errn = serviceDetail(exiIn, exiOut);
-		} else if (exiIn->V2G_Message.Body.PaymentServiceSelectionReq_isUsed) {
-		    printf("Handling payment service selection request\n");
-		    err = payment_service_selection(exiIn, exiOut, session);
-			//errn = paymentServiceSelection(exiIn, exiOut);
-		} else if (exiIn->V2G_Message.Body.PaymentDetailsReq_isUsed) {
-		    printf("Handling payment details request\n");
-			err = handle_payment_detail(exiIn, exiOut, session);
-		} else if (exiIn->V2G_Message.Body.AuthorizationReq_isUsed) {
-		    printf("Handling authorization request\n");
-		    err = handle_authorization(exiIn, exiOut, session);
-			//errn = authorization(exiIn, exiOut);
-		} else if (exiIn->V2G_Message.Body.ChargeParameterDiscoveryReq_isUsed) {
-		    printf("Handling charge parameter discv. request\n");
-		    err = handle_charge_parameters(exiIn, exiOut, session);
-			//errn = chargeParameterDiscovery(exiIn, exiOut);
-		} else if (exiIn->V2G_Message.Body.PowerDeliveryReq_isUsed) {
-		    printf("Handling power delivery request\n");
-			err = handle_power_delivery(exiIn, exiOut, session);
-		} else if (exiIn->V2G_Message.Body.ChargingStatusReq_isUsed) {
-		    printf("Handling charging status request\n");
-			err = handle_charging_status(exiIn, exiOut, session);
-		} else if (exiIn->V2G_Message.Body.MeteringReceiptReq_isUsed) {
-		    printf("No handling metering receipt request\n");
-		    err =  -1;
-			//errn = meteringReceipt(exiIn, exiOut);
-		} else if (exiIn->V2G_Message.Body.SessionStopReq_isUsed) {
-		    printf("Handling session stop request\n");
-		    err = handle_session_stop(exiIn, exiOut, session);
-		} else {
-		    printf("create_response_message: request type not found\n");
-		}
-		session_unlock(session);
-		session_remove_ref(session);
-	} else {
+	if (!exiIn->V2G_Message_isUsed) {
 	    printf("V2GMessage not used\n");
+	    return -1;
 	}
+    // === Fetch the session ===
+    if (exiIn->V2G_Message.Body.SessionSetupReq_isUsed) {
+	    s =  session_new(sizeof(session_data_t));
+	    printf("New Session id = %lu", s->id);
+    } else {
+        s = session_lookup_exi(exiIn);
+    }
+    sd = (session_data_t*)&s->data;
+    // === Inititialize request handling ===
+    session_lock(s);
+	init_v2g_response(exiOut, s);
+	// === Start request handling ===
+	if (exiIn->V2G_Message.Body.SessionSetupReq_isUsed) {
+	    printf("Handling session setup request\n");
+	    exiOut->V2G_Message.Body.SessionSetupRes_isUsed = 1u;
+	    init_v2gSessionSetupResType(&exiOut->V2G_Message.Body.SessionSetupRes);
+		err = handle_session_setup(exiIn, exiOut, s, sd);
+	}
+	if (exiIn->V2G_Message.Body.ServiceDiscoveryReq_isUsed) {
+		printf("Handling service discovery request\n");
+		exiOut->V2G_Message.Body.ServiceDiscoveryRes_isUsed = 1u;
+	    init_v2gServiceDiscoveryResType(&exiOut->V2G_Message.Body.ServiceDiscoveryRes);
+		err = handle_service_discovery(exiIn, exiOut, s, sd);
+	} else if (exiIn->V2G_Message.Body.ServiceDetailReq_isUsed) {
+	    printf("No service detail request\n");
+	    err = -1;
+	} else if (exiIn->V2G_Message.Body.PaymentServiceSelectionReq_isUsed) {
+	    printf("Handling payment service selection request\n");
+	    exiOut->V2G_Message.Body.PaymentServiceSelectionRes_isUsed= 1u;
+	    init_v2gPaymentServiceSelectionResType(&exiOut->V2G_Message.Body.PaymentServiceSelectionRes);
+	    err = payment_service_selection(exiIn, exiOut, s, sd);
+	} else if (exiIn->V2G_Message.Body.PaymentDetailsReq_isUsed) {
+	    printf("Handling payment details request\n");
+	    exiOut->V2G_Message.Body.PaymentDetailsRes_isUsed = 1u;
+	    init_v2gPaymentDetailsResType(&exiOut->V2G_Message.Body.PaymentDetailsRes);
+		err = handle_payment_detail(exiIn, exiOut, s, sd);
+	} else if (exiIn->V2G_Message.Body.AuthorizationReq_isUsed) {
+	    printf("Handling authorization request\n");
+		exiOut->V2G_Message.Body.AuthorizationRes_isUsed = 1u;
+		init_v2gAuthorizationResType(&exiOut->V2G_Message.Body.AuthorizationRes);
+	    err = handle_authorization(exiIn, exiOut, s, sd);
+	} else if (exiIn->V2G_Message.Body.ChargeParameterDiscoveryReq_isUsed) {
+	    printf("Handling charge parameter discv. request\n");
+	    exiOut->V2G_Message.Body.ChargeParameterDiscoveryRes_isUsed = 1u;
+	    init_v2gChargeParameterDiscoveryResType(&exiOut->V2G_Message.Body.ChargeParameterDiscoveryRes);
+	    err = handle_charge_parameters(exiIn, exiOut, s, sd);
+	} else if (exiIn->V2G_Message.Body.PowerDeliveryReq_isUsed) {
+	    printf("Handling power delivery request\n");
+	    exiOut->V2G_Message.Body.PowerDeliveryRes_isUsed = 1u;
+	    init_v2gPowerDeliveryResType(&exiOut->V2G_Message.Body.PowerDeliveryRes);
+		err = handle_power_delivery(exiIn, exiOut, s, sd);
+	} else if (exiIn->V2G_Message.Body.ChargingStatusReq_isUsed) {
+	    printf("Handling charging status request\n");
+	    exiOut->V2G_Message.Body.ChargingStatusRes_isUsed = 1u;
+	    init_v2gChargingStatusResType(&exiOut->V2G_Message.Body.ChargingStatusRes);
+		err = handle_charging_status(exiIn, exiOut, s, sd);
+	} else if (exiIn->V2G_Message.Body.MeteringReceiptReq_isUsed) {
+	    printf("No handling metering receipt request\n");
+	    err =  -1;
+		//errn = meteringReceipt(exiIn, exiOut);
+	} else if (exiIn->V2G_Message.Body.SessionStopReq_isUsed) {
+	    printf("Handling session stop request\n");
+	    exiOut->V2G_Message.Body.SessionStopRes_isUsed = 1u;
+	    init_v2gSessionStopResType(&exiOut->V2G_Message.Body.SessionStopRes);
+	    err = handle_session_stop(exiIn, exiOut, s, sd);
+	} else {
+	    printf("create_response_message: request type not found\n");
+	}
+	session_unlock(s);
+	session_remove_ref(s);
 	if (err != 0) {
         printf("Handle request returning %d\n", err);
     }
