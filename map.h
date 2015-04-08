@@ -1,9 +1,8 @@
+#ifndef MAP_H
+#define MAP_H
+
 #include <stdlib.h>
 #include <inttypes.h>
-#ifndef MAP_H
-#define MAP_H 1
-
-#define nil ((void *)0)
 
 typedef union Key Key;
 typedef struct Bucket Bucket;

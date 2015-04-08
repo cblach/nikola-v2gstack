@@ -22,7 +22,7 @@ mapinsert(Map *map,
 {
     size_t h = map->hash(k) % map->nbuckets;
     Bucket *b = malloc(sizeof(Bucket) + map->elemsz);
-    if (!b) { return nil; }
+    if (!b) { return NULL; }
 
     b->k = k;
     b->next = map->buckets[h];
@@ -42,7 +42,7 @@ mapfind(Map *map,
         if (map->cmp(k, b->k) == 0) { return b->v; }
     }
 
-    return nil;
+    return NULL;
 }
 
 void
@@ -52,7 +52,7 @@ mapremove(Map *map,
     size_t h = map->hash(k) % map->nbuckets;
     Bucket *b, *p;
 
-    for (p = nil, b = map->buckets[h]; b; p = b, b = b->next) {
+    for (p = NULL, b = map->buckets[h]; b; p = b, b = b->next) {
         if (map->cmp(k, b->k) == 0) {
             if (p) {
                 p->next = b->next;
