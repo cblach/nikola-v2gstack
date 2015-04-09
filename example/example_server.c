@@ -60,6 +60,38 @@ void init_v2g_response(struct v2gEXIDocument *exiOut, session_t *s)
 	exiOut->V2G_Message_isUsed = 1u;
 }
 
+void SetMaxPowerEntry(struct v2gPMaxScheduleType* sched,
+                       uint32_t start, int32_t value,
+                       uint32_t duration)
+{
+    struct v2gPMaxScheduleEntryType entry;
+    uint16_t* counter = &sched->PMaxScheduleEntry.arrayLen;
+    const int max_value = (2 << 16) - 1;
+    const int max_power = (2 << 8) - 1;
+    int power = 0;
+    while(abs(value) > max_value &&
+          power < max_power) {
+        value /= 10;
+        power ++;
+    }
+
+    sched->PMaxScheduleEntry.array[*counter] =  (struct v2gPMaxScheduleEntryType) {
+        .TimeInterval_isUsed = 0,
+        .RelativeTimeInterval_isUsed = 1u,
+        .RelativeTimeInterval = (struct v2gRelativeTimeIntervalType) {
+            .start = start,
+            .duration = duration,
+            .duration_isUsed = duration ? 1u : 0,
+        },
+        .PMax = (struct v2gPhysicalValueType) {
+	        .Value = value,
+	        .Multiplier = power,
+	        .Unit = v2gunitSymbolType_W,
+	    },
+	};
+    (*counter)++;
+}
+
 double phyval_to_seconds(struct v2gPhysicalValueType v)
 {
     switch (v.Unit) {
@@ -277,7 +309,6 @@ static int payment_service_selection(struct v2gEXIDocument *exiIn,
         res->ResponseCode = v2gresponseCodeType_FAILED_UnknownSession;
         return 0;
     }
-    printf("hm1\n");
     switch (req->SelectedPaymentOption) {
     case v2gpaymentOptionType_ExternalPayment:
         printf("\t\t SelectedPaymentOption=ExternalPayment\n");
@@ -288,10 +319,8 @@ static int payment_service_selection(struct v2gEXIDocument *exiIn,
         res->ResponseCode = v2gresponseCodeType_FAILED_PaymentSelectionInvalid;
         return 0;
     }
-    printf("hm2 %p\n", sd);
     res->ResponseCode = v2gresponseCodeType_OK;
     sd->payment_type = req->SelectedPaymentOption;
-    printf("hm3\n");
     return 0;
 }
 
@@ -488,6 +517,7 @@ static int handle_charge_parameters(struct v2gEXIDocument *exiIn,
     struct v2gChargeParameterDiscoveryReqType *req = &exiIn->V2G_Message.Body.ChargeParameterDiscoveryReq;
     struct v2gChargeParameterDiscoveryResType *res = &exiOut->V2G_Message.Body.ChargeParameterDiscoveryRes;
     struct v2gSAScheduleTupleType *tuple;
+    struct v2gPMaxScheduleType *sched;
     bool valid_mode = false;
     // === Lookup session ===
 	res->EVSEProcessing = v2gEVSEProcessingType_Finished;
@@ -513,31 +543,17 @@ static int handle_charge_parameters(struct v2gEXIDocument *exiIn,
     res->SAScheduleList.SAScheduleTuple.arrayLen = 1;
 	tuple->SAScheduleTupleID = 1;
 	tuple->SalesTariff_isUsed = 1;
+
+	sched = &tuple->PMaxSchedule;
 	// === Maximum Power Schedule ===
-	tuple->PMaxSchedule.PMaxScheduleEntry.arrayLen = 2; // 2 Entris
-	// == PMax Schedule Entry 1 ==
-	tuple->PMaxSchedule.PMaxScheduleEntry.array[0] = (struct v2gPMaxScheduleEntryType) {
-	    .PMax = (struct v2gPhysicalValueType) {
-	        .Value=20,
-	        .Multiplier = 3, // 10^3 (=kW)
-	        .Unit = v2gunitSymbolType_W,
-	    },
-	    .RelativeTimeInterval.start = 0,
-	    .RelativeTimeInterval_isUsed = 1u,
-	    .RelativeTimeInterval.duration_isUsed =0,
-	};
-	// == PMax Schedule Entry 2 ==
-	tuple->PMaxSchedule.PMaxScheduleEntry.array[1] = (struct v2gPMaxScheduleEntryType) {
-	    .PMax = (struct v2gPhysicalValueType) {
-	        .Value=0,
-	        .Multiplier = 3,
-	        .Unit = v2gunitSymbolType_W,
-	    },
-	    .RelativeTimeInterval.start = 1200,
-	    .RelativeTimeInterval_isUsed = 1u,
-	    .RelativeTimeInterval.duration_isUsed = 1,
-	    .RelativeTimeInterval.duration = 100,
-	};
+	// == PMax Schedule Entries ==
+	//SetMaxPowerEntry(schedule, relative time, power, duration)
+	// Only duration of the last entry must be set:
+	sched->PMaxScheduleEntry.arrayLen = 0; // must be 0
+	SetMaxPowerEntry(sched,   0, 20000,   0),
+	SetMaxPowerEntry(sched, 100, 25000,   0),
+	SetMaxPowerEntry(sched, 200, 15000,   0),
+	SetMaxPowerEntry(sched, 300, 10000, 100),
 
     // === Sales tariffes ===
 	tuple->SalesTariff.NumEPriceLevels=2;

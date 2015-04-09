@@ -38,40 +38,45 @@ struct ev_session{
 //            Utility Functions
 //=========================================
 
-ssize_t read_file(const char *path, void *buf, size_t buf_len)
-{
-    int fd;
-    ssize_t len;
-    ssize_t n = 0;
-    fd = open(path, O_RDONLY);
-    if (fd < 0) {
-        return -1;
-    }
-    while (buf_len - n > 0) {
-        len = read(fd, (char*)buf + n, buf_len - n);
-        switch (len) {
-        case -1:
-            perror("readfile: read");
-            close(fd);
-            return -1;
-        case 0: // EOF
-            close(fd);
-            return n;
-        }
-        n += len;
-    }
-    printf("File too long for buffer. Must be smaller than %zd bytes\n", buf_len);
-    close(fd);
-    return -1;
-}
-
-int load_contract(const char *keyfile_path, ev_session_t *s) {
-    int err;
+int load_contract(const char *pemchain_path,
+                  const char *keyfile_path,
+                  ev_session_t *s) {
+    int err, i = 0;
+    x509_crt crtchain;
+    x509_crt* crt;
+    uint8_t buffer[4096];
     ssize_t n;
     pk_context pk;
     pk_init(&pk);
     const char *pers = "ecdsa";
-
+    x509_crt_init(&crtchain);
+    err = x509_crt_parse_file(&crtchain, pemchain_path);
+    if (err != 0) {
+        printf("load_contract: x509_crl_parse_file error\n");
+        return -1;
+    }
+    if (crtchain.raw.len > v2gCertificateChainType_Certificate_BYTES_SIZE) {
+        printf("load_contract: certificate too big\n");
+        return -1;
+    }
+    memcpy(&s->contract.cert, crtchain.raw.p, crtchain.raw.len);
+    s->contract.cert_len = crtchain.raw.len;
+    crt = &crtchain;
+    while (crt->next != NULL) {
+        if (i > v2gSubCertificatesType_Certificate_ARRAY_SIZE) {
+            printf("load_contract: certificate chain too long (max 4 subcerts)\n");
+            return -1;
+        }
+        crt = crt->next;
+        if (crt->raw.len > v2gSubCertificatesType_Certificate_BYTES_SIZE) {
+            printf("load_contract: subcertificate too big\n");
+            return -1;
+        }
+        memcpy(&s->contract.sub_certs[i], crt->raw.p, crt->raw.len);
+        s->contract.subcert_len[i] = crt->raw.len;
+        i++;
+    }
+    x509_crt_free(&crtchain);
     err = pk_parse_keyfile(&pk, keyfile_path, NULL);
     if (err != 0) {
         printf("could not parse keyfile at %s\n",keyfile_path);
@@ -79,22 +84,12 @@ int load_contract(const char *keyfile_path, ev_session_t *s) {
     }
     ecp_keypair *kp = pk_ec(pk);
     err = ecdsa_from_keypair(&s->contract.key, kp);
+    pk_free(&pk);
     if (err != 0) {
         printf("could not retrieve ecdsa from keypair at %s\n",keyfile_path);
         return -1;
     }
-    n = read_file("certs/contract.pem", &s->contract.cert, v2gCertificateChainType_Certificate_BYTES_SIZE);
-    if (n <= 0) {
-        printf("load_contract read file error\n");
-        return -1;
-    }
-    s->contract.cert_len = n;
-    n = read_file("certs/root/mobilityop/certs/mobilityop.pem", &s->contract.sub_certs[0], v2gCertificateChainType_Certificate_BYTES_SIZE);
-    if (n <= 0) {
-        printf("load_contract read file error\n");
-        return -1;
-    }
-    s->contract.subcert_len[0] = n;
+
     entropy_init(&s->contract.entropy);
     if ((err = ctr_drbg_init(&s->contract.ctr_drbg, entropy_func,
                              &s->contract.entropy,
@@ -190,6 +185,33 @@ int sign_auth_request(struct v2gAuthorizationReqType *req,
 	sig->Object.array[0].Encoding_isUsed = 0;
 	sig->SignatureValue.Id_isUsed = 0;
     return 0;
+}
+
+void SetProfileEntry(struct v2gChargingProfileType* prof,
+                     uint32_t start, int32_t value,
+                     uint32_t nphases)
+{
+    uint16_t* counter = &prof->ProfileEntry.arrayLen;
+    const int max_value = (2 << 16) - 1;
+    const int max_power = (2 << 8) - 1;
+    int power = 0;
+    while(abs(value) > max_value &&
+          power < max_power) {
+        value /= 10;
+        power ++;
+    }
+
+    prof->ProfileEntry.array[*counter] =  (struct v2gProfileEntryType) {
+        .ChargingProfileEntryStart = start,
+        .ChargingProfileEntryMaxNumberOfPhasesInUse = nphases,
+        .ChargingProfileEntryMaxNumberOfPhasesInUse_isUsed = 1u,
+        .ChargingProfileEntryMaxPower = (struct v2gPhysicalValueType) {
+	        .Value = value,
+	        .Multiplier = power,
+	        .Unit = v2gunitSymbolType_W,
+	    },
+	};
+    (*counter)++;
 }
 
 
@@ -354,7 +376,7 @@ int payment_selection_request(evcc_conn_t *conn, ev_session_t *s)
     }
     // === Validate response code ===
     if (verify_response_code(exiOut.V2G_Message.Body.PaymentServiceSelectionRes.ResponseCode) != 0) {
-        printf("payment_selection_request: session setup response NOT ok, code = %d\n", exiOut.V2G_Message.Body.PaymentServiceSelectionRes.ResponseCode);
+        printf("payment_selection_request: response NOT ok, code = %d\n", exiOut.V2G_Message.Body.PaymentServiceSelectionRes.ResponseCode);
         return -1;
     }
     return 0;
@@ -373,10 +395,12 @@ int payment_details_request(evcc_conn_t *conn, ev_session_t *s)
 	req->eMAID.characters[0] = 1;
 	req->eMAID.characters[1] = 123;
 	req->eMAID.charactersLen = 2;
+	if (s->contract.cert_len == 0) {
+	    printf("payment_details_request: contract certificate not loaded\n");
+	    return -1;
+	}
     memcpy(req->ContractSignatureCertChain.Certificate.bytes, s->contract.cert, s->contract.cert_len);
 	req->ContractSignatureCertChain.Certificate.bytesLen = s->contract.cert_len;
-
-
 	req->ContractSignatureCertChain.SubCertificates_isUsed = 1u;
 	memcpy(req->ContractSignatureCertChain.SubCertificates.Certificate.array[0].bytes, s->contract.sub_certs[0], s->contract.subcert_len[0]);
     req->ContractSignatureCertChain.SubCertificates.Certificate.array[0].bytesLen = s->contract.subcert_len[0];
@@ -541,54 +565,16 @@ int power_delivery_request(evcc_conn_t *conn, ev_session_t *s)
 	// === A charging profile is used for this request===
 	exiIn.V2G_Message.Body.PowerDeliveryReq.ChargingProfile_isUsed = 1u;
 	exiIn.V2G_Message.Body.PowerDeliveryReq.SAScheduleTupleID  = s->pmax_schedule.tupleid;
-    // Max 5 charging profile entries (3 being used)
 
-	profile->ProfileEntry.arrayLen = 4;
 
-    // === Charging Profile Entry 1 ===
-	profile->ProfileEntry.array[0] = (struct v2gProfileEntryType) {
-	    .ChargingProfileEntryMaxPower = (struct v2gPhysicalValueType) {
-	        .Value = 15,
-	        .Multiplier = 3, // * 10^3 (e.g. kW)
-	        .Unit = v2gunitSymbolType_W,
-	    },
-	    .ChargingProfileEntryStart = 0,
-	    .ChargingProfileEntryMaxNumberOfPhasesInUse = 3,
-	    .ChargingProfileEntryMaxNumberOfPhasesInUse_isUsed = 1,
-	};
-    // === Charging Profile Entry 2 ===
-	profile->ProfileEntry.array[1] = (struct v2gProfileEntryType) {
-	    .ChargingProfileEntryMaxPower = (struct v2gPhysicalValueType) {
-	        .Value = 20,
-	        .Multiplier = 3, // * 10^3 (e.g. kW)
-	        .Unit = v2gunitSymbolType_W,
-	    },
-	    .ChargingProfileEntryStart = 100,
-	    .ChargingProfileEntryMaxNumberOfPhasesInUse = 3,
-	    .ChargingProfileEntryMaxNumberOfPhasesInUse_isUsed = 1,
-	};
-    // === Charging Profile Entry 3 ===
-	profile->ProfileEntry.array[2] = (struct v2gProfileEntryType) {
-	    .ChargingProfileEntryMaxPower = (struct v2gPhysicalValueType) {
-	        .Value = 10,
-	        .Multiplier = 3, // * 10^3 (e.g. kW)
-	        .Unit = v2gunitSymbolType_W,
-	    },
-	    .ChargingProfileEntryStart = 200,
-	    .ChargingProfileEntryMaxNumberOfPhasesInUse = 3,
-	    .ChargingProfileEntryMaxNumberOfPhasesInUse_isUsed = 1,
-	};
-    // === Charging Profile Entry 4 ===
-	profile->ProfileEntry.array[3] = (struct v2gProfileEntryType) {
-	    .ChargingProfileEntryMaxPower = (struct v2gPhysicalValueType) {
-	        .Value = 0,
-	        .Multiplier = 3, // * 10^3 (e.g. kW)
-	        .Unit = v2gunitSymbolType_W,
-	    },
-	    .ChargingProfileEntryStart = 400,
-	    .ChargingProfileEntryMaxNumberOfPhasesInUse = 3,
-	    .ChargingProfileEntryMaxNumberOfPhasesInUse_isUsed = 1,
-	};
+	 // Must be initialized to 0
+	// == Charging Entries ==
+	//SetProfileEntry(profile, relative time, power, max phases)
+    profile->ProfileEntry.arrayLen = 0; // must be 0
+    SetProfileEntry(profile,   0, 15000, 3);
+    SetProfileEntry(profile, 100, 20000, 3);
+    SetProfileEntry(profile, 200, 10000, 3);
+    SetProfileEntry(profile, 400,     0, 3);
 	err = v2g_request(conn, &exiIn, &exiOut);
     if (err != 0) {
         printf("power_delivery_request v2g_request error, exiting\n");
@@ -667,7 +653,7 @@ void ev_example(const char *if_name)
     memset(&conn, 0, sizeof(evcc_conn_t));
     memset(&s, 0, sizeof(s));
     int err;
-    err = load_contract("certs/contract.key", &s);
+    err = load_contract("certs/contractchain.pem", "certs/contract.key", &s);
     if (err != 0) {
         printf("ev_example: load_contract error\n");
         return;
@@ -704,7 +690,7 @@ void ev_example(const char *if_name)
     printf("payment details request\n");
     err = payment_details_request(&conn, &s);
     if (err != 0) {
-        printf("ev_example: payment_selection_request err\n");
+        printf("ev_example: payment_details_request err\n");
         return;
     }
     printf("authorization request\n");

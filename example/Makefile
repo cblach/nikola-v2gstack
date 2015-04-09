@@ -27,7 +27,6 @@ LIBS=\
 -lpthread\
 
 INCLUDES=\
-    -Islac/\
     -I../\
     -I../utils/libmultitask/unix\
     -I../utils/OpenV2G_0.9.3/src/codec\
