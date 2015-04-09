@@ -1,6 +1,7 @@
-#include "plc_eth.h"
 #include <stdio.h>
-#include "multitask.h"
+#include <multitask.h>
+#include <nikolav2g.h>
+#include "plc_eth.h"
 
 typedef uint8_t byte;
 
@@ -9,6 +10,23 @@ struct plgp_slac_args{
     const char *if_name;
     byte *evse_mac;
 };
+
+static void dumpbytes(const void *data, size_t len)
+{
+    const byte *d = data;
+    size_t i, j;
+
+    if (!chattyv2g) { return; }
+
+    for (i = 0; i < len; i += 16) {
+        fprintf(stderr, " ");
+        for (j = 0; j < 16 && i + j < len; ++j) {
+            fprintf(stderr, " %02X", d[i + j]);
+        }
+        fprintf(stderr, "\n");
+    }
+}
+
 void plgp_slac_listen_blocking(void *vargs)
 {
     plgp_slac_args_t *args = (plgp_slac_args_t*)vargs;
@@ -42,7 +60,7 @@ void plgp_slac_listen_blocking(void *vargs)
             switch (slac_type) {
             case 0x0b02:
                 if (buffer[17] != 0x01) {
-                    print_byte_arr(buffer, n);
+                    dumpbytes(buffer, n);
                 } else {
                     printf(".");
                     fflush(stdout);
@@ -50,7 +68,7 @@ void plgp_slac_listen_blocking(void *vargs)
                 break;
             case 0x0b04:
                 if (buffer[17] != 0x01) {
-                    print_byte_arr(buffer, n);
+                    dumpbytes(buffer, n);
                 }
                 break;
             case 0x0b06:
@@ -61,20 +79,25 @@ void plgp_slac_listen_blocking(void *vargs)
                 break;
             case 0x0b05:
                 printf("Attenuation profile received\n");
-                print_byte_arr(buffer, n);
+                dumpbytes(buffer, n);
                 break;
             default:
                 printf("unexpected slac type %0x\n", slac_type);
-                print_byte_arr(buffer, n);
+                dumpbytes(buffer, n);
                 break;
             }
         }
     }
 }
-void plgp_slac_listen(const char *if_name, byte dest_mac_evse[6])
-{
-    plgp_slac_args_t args = {.if_name = if_name,
-                                  .evse_mac = dest_mac_evse};
-    threadcreate(plgp_slac_listen_blocking, &args, 1024 * 1024);
+int plgp_slac_listen(const char *if_name, byte dest_mac_evse[6])
+ {
+    plgp_slac_args_t args = {
+        .if_name = if_name,
+        .evse_mac = dest_mac_evse
+    };
+    if (threadcreate(plgp_slac_listen_blocking, &args, 1024 * 1024) < 0) {
+        return -1;
+    }
     rendez(&args, NULL);
+    return 0;
 }

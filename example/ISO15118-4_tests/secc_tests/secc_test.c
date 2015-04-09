@@ -1,10 +1,9 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <net/if.h>
-#include "nikolav2g.h"
-#include "example_client.c"
+#include <nikolav2g.h>
+#include <unistd.h>
 #include "powerdeliveryres_test.c"
-
+#include "client.h"
+int session_request(evcc_conn_t *conn, ev_session_t *s);
+int service_discovery_request(evcc_conn_t *conn, ev_session_t *s)
 
 
 
@@ -64,8 +63,8 @@ void threadmain(int argc,
     struct sockaddr_in6 secc_tlsaddr, secc_tcpaddr;
     int err, tls_port, tcp_port, n = 0;
     parseFlags(argc, argv);
-    memset(&conn, 0, sizeof(evcc_conn_t));
-    memset(&s, 0, sizeof(ev_session_t));
+    memset(&conn, 0, sizeof(conn));
+    memset(&s, 0, sizeof(s));
 
     err = load_contract("../../certs/contractchain.pem", "../../certs/contract.key", &s);
     if (err != 0) {

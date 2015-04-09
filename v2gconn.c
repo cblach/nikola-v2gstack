@@ -1,18 +1,18 @@
-
 #include "nikolav2g.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <limits.h>
-#include "polarssl/ssl_cache.h"
-#include "polarssl/error.h"
-#include "OpenV2G/appHandEXIDatatypes.h"
-#include "OpenV2G/appHandEXIDatatypesEncoder.h"
-#include "OpenV2G/appHandEXIDatatypesDecoder.h"
-#include "OpenV2G/v2gEXIDatatypesEncoder.h"
-#include "OpenV2G/v2gEXIDatatypesDecoder.h"
-#include "OpenV2G/v2gtp.h"
+#include <polarssl/ssl_cache.h>
+#include <polarssl/error.h>
+#include <OpenV2G/appHandEXIDatatypes.h>
+#include <OpenV2G/appHandEXIDatatypesEncoder.h>
+#include <OpenV2G/appHandEXIDatatypesDecoder.h>
+#include <OpenV2G/v2gEXIDatatypesEncoder.h>
+#include <OpenV2G/v2gEXIDatatypesDecoder.h>
+#include <OpenV2G/v2gtp.h>
+int chattyv2g = 0;
 //===================================
 //             Defines
 //===================================

@@ -1,11 +1,11 @@
-#include "homeplug.h"
-#include "slac.h"
-#include "plc_eth.h"
 #include <time.h>
 #include <assert.h>
 #include <endian.h>
-#include "multitask.h"
+#include <multitask.h>
 #include <limits.h>
+#include "homeplug.h"
+#include "slac.h"
+#include "plc_eth.h"
 
 typedef uint8_t byte;
 /*#define HOMEPLUG_MMV 0x01

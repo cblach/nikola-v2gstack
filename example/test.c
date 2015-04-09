@@ -1,95 +1,206 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-//#include <fcntl.h>
 #include <string.h>
 #include <errno.h>
-#include "nikolav2g.h"
-//#include <net/if.h>
-#include "plc_eth.h"
-void ev_example(char *if_name);
-void evse_example(char *if_name);
-int slac_associate(char *if_name);
-void plgp_slac_listen(char *if_name, uint8_t dest_mac_evse[6]);
-typedef enum { EVSE_NODE, EV_NODE } node_type_t;
+#include <nikolav2g.h>
+#include <polarssl/x509.h>
+#include <polarssl/error.h>
+#include "slac/plc_eth.h"
+#include "client.h"
+#include "server.h"
 
-int Node_Type = EVSE_NODE;
-bool Slac_Enable = false;
-char V2G_Network_Interface[IFNAMSIZ] = "eth0";
 
-void parseFlags(int argc, char **argv)
+int slac_associate(const char *if_name);
+void plgp_slac_listen(const char *if_name, const uint8_t dest_mac_evse[6]);
+
+static const uint8_t EVMAC[6] = {0x00, 0x05, 0xB6, 0x01, 0x86, 0xBD};
+static const uint8_t EVSEMAC[6] = {0x00, 0x05, 0xB6, 0x01, 0x88, 0xA3};
+
+static const char *argv0;
+
+static void fatal(const char *fmt, ...)
 {
-    int opt;
-    while ((opt = getopt(argc, argv, "i:t:v")) != -1) {
-        switch (opt) {
-        case 'i':
-            if (optarg) {
-                printf("Interface %s used for PLC modem connection\n", optarg);
-                strcpy(V2G_Network_Interface, optarg);
-            } else {
-                printf("Error: Empty interface name\n");
-                exit(EXIT_FAILURE);
-            }
-            break;
-        case 't':
-            if (strcasecmp(optarg, "EVSE") == 0) {
-                Node_Type = EVSE_NODE;
-                printf("Starting service in EVSE mode\n");
-            } else if (strcasecmp(optarg, "EV") == 0) {
-                Node_Type = EV_NODE;
-                printf("Starting service in EV mode\n");
-            } else {
-                printf("Error: unknown node type %s\n, defaulting to EVSE\n", optarg);
-            }
-            break;
-        case 'v': // Verbose
-            chattyv2g = 1;
-            break;
-        case ':':
-            fprintf(stderr, "Option -%c requires an operand\n", optopt);
-            exit(EXIT_FAILURE);
-        case '?':
-            fprintf(stderr, "Unrecognized option: -%c\n", optopt);
-            exit(EXIT_FAILURE);
-        default:
-            fprintf(stderr, "Usage: %s [-i interface] [-t node type]\n",
-                   argv[0]);
-            exit(EXIT_FAILURE);
-        }
-    }
+    va_list ap;
+
+    fprintf(stderr, "%s: ", argv0);
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    fprintf(stderr, "\n");
+
+    exit(1);
 }
 
-static uint8_t EVMAC[6] = {0x00, 0x05, 0xB6, 0x01, 0x86, 0xBD};
-static uint8_t EVSEMAC[6] = {0x00, 0x05, 0xB6, 0x01, 0x88, 0xA3};
+static void ev(const char *if_name)
+{
+    evcc_conn_t conn;
+    ev_session_t s;
+    memset(&conn, 0, sizeof(evcc_conn_t));
+    memset(&s, 0, sizeof(s));
+    int err;
+    if (load_contract("certs/contractchain.pem", "certs/contract.key", &s) != 0) {
+        fatal("can't load certs/contract.key: %m");
+    }
+    if (ev_sdp_discover_evse(if_name, &conn.addr, true) < 0) {
+        fatal("failed to discover EVSE on interface %s", if_name);
+    }
+    printf("connecting to secc\n");
+    err = evcc_connect_tls(&conn, "certs/ev.pem", "certs/ev.key");
+   //err = evcc_connect_tcp(&conn);
+    if (err != 0) {
+        printf("main: evcc_connect_tls error\n");
+        return;
+    }
+    printf("session setup request\n");
+    err = session_request(&conn, &s);
+    if (err != 0) {
+        printf("RIP session_request\n");
+        return;
+    }
+    printf("service discovery request\n");
+    err = service_discovery_request(&conn, &s);
+    if (err != 0) {
+        printf("ev_example: service discovery request err\n");
+        return;
+    }
+    printf("payment selection request\n");
+    err = payment_selection_request(&conn, &s);
+    if (err != 0) {
+        printf("ev_example: payment_selection_request err\n");
+        return;
+    }
+    printf("payment details request\n");
+    err = payment_details_request(&conn, &s);
+    if (err != 0) {
+        printf("ev_example: payment_selection_request err\n");
+        return;
+    }
+    printf("authorization request\n");
+    err = authorization_request(&conn, &s);
+    if (err != 0) {
+        printf("ev_example: authorization_request err\n");
+        return;
+    }
+    printf("charge parameter request\n");
+    err = charge_parameter_request(&conn, &s);
+    if (err != 0) {
+        printf("ev_example: charge_parameter_request err\n");
+        return;
+    }
+    printf("power delivery request\n");
+    err = power_delivery_request(&conn, &s);
+    if (err != 0) {
+        printf("ev_example: power_delivery_request err\n");
+        return;
+    }
+    printf("Charging (repeating charging status requests)\n");
+    for (int i = 0;i < 10; i++) {
+        err = charging_status_request(&conn, &s);
+        if (err != 0) {
+            printf("ev_example: charging_status_request err\n");
+            return;
+        }
+        printf("=");
+        fflush(stdout);
+        sleep(1);
+    }
+    session_stop_request(&conn, &s);
+    if (err != 0) {
+        printf("ev_example: session_stop_request err\n");
+        return;
+    }
+    printf("Finished charging, ending session\n");
+}
 
+static void evse(const char *if_name)
+{
+    int tls_port, tcp_port, tls_sockfd, tcp_sockfd;
 
-int chattyv2g = 0; // == 0 means no error messages
+    // Init the contract root certificates
+    int err = x509_crt_parse_path(&Trusted_contract_rootcert_chain,
+                                  "certs/root/mobilityop/certs/");
+    if (err != 0) {
+        printf("evse_example: Unable to load contract root certificates\n");
+        char strerr[256];
+        polarssl_strerror(err, strerr, 256);
+        printf("err = %s\n", strerr);
+        return;
+    }
+    init_sessions();
+    // === Bind to dynamic port ===
+    tls_sockfd = bind_v2gport(&tls_port);
+    if (tls_sockfd < 0) {
+        printf("secc_bind_tls  returned %d\n", tls_sockfd);
+        return;
+    }
+    tcp_sockfd = bind_v2gport(&tcp_port);
+    if (tcp_sockfd < 0) {
+        printf("secc_bind_tls  returned %d\n", tcp_sockfd);
+        return;
+    }
+    printf("start sdp listen\n");
+    secc_listen_tls(tls_sockfd, &create_response_message, "certs/evse.pem", "certs/evse.key");
+    secc_listen_tcp(tcp_sockfd, &create_response_message);
+    // Set port to 0 to disable tls or tcp
+    // (always do sdp_listen after secc_listen_*)
+    sdp_listen(if_name, tls_port, tcp_port);
+}
+
+void usage(void)
+{
+    fprintf(stderr, "Usage: %s [-sv] [--] interface node-type\n", argv0);
+    exit(1);
+}
+
 void
 threadmain(int argc,
        char *argv[])
 {
-    parseFlags(argc, argv);
-    //testEth();
-    if (Node_Type == EV_NODE) {
-        if (Slac_Enable) {
-            switch_power_line(V2G_Network_Interface, EVMAC, false);
+    enum { EV, EVSE };
+    const char *iface, *type;
+    int opt, slac = 0;
+
+    argv0 = argv[0];
+    while ((opt = getopt(argc, argv, "sv")) != -1) {
+        switch (opt) {
+        case 's':
+           slac++;
+            break;
+
+        case 'v':
+            chattyv2g++;
+            break;
+
+        default:
+            usage();
+        }
+    }
+    if (optind + 1 >= argc) { usage(); }
+
+    iface = argv[optind];
+    type = argv[optind + 1];
+    if (strcasecmp(type, "EVSE") == 0) {
+        switch_power_line(iface, EVSEMAC, false);
+        if (slac) {
+            printf("SLAC enabled\n");
+            plgp_slac_listen(iface, EVSEMAC);
+        }
+        evse(iface);
+    } else if (strcasecmp(type, "EV") == 0) {
+        if (slac) {
+            switch_power_line(iface, EVMAC, false);
             printf("=== STARTING SLAC ASSOCIATION ===\n");
-            while(slac_associate(V2G_Network_Interface) != 0) {
+            while(slac_associate(iface) != 0) {
                 printf("something went wrong, trying again\n");
             }
             printf("Slac is done. Waiting 8 seconds for networks to form.\n");
             sleep(8);
         }
-        ev_example(V2G_Network_Interface);
-        //struct ev_request_t req;
-    } else if (Node_Type == EVSE_NODE) {
-        switch_power_line(V2G_Network_Interface, EVSEMAC, false);
-        if (Slac_Enable) {
-            printf("SLAC enabled\n");
-            plgp_slac_listen(V2G_Network_Interface, EVSEMAC);
-        }
-        evse_example(V2G_Network_Interface);
-    }
+       ev(iface);
+    } else {
+        fatal("node type must be EV or EVSE");
+     }
     printf("Exiting\n");
     exit(0);
 }

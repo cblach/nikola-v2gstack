@@ -1,12 +1,13 @@
 CC=clang
-LD=clang -Wall -pedantic -std=gnu11 -fno-strict-aliasing
-CFLAGS=
+LD=clang
+CFLAGS=-g -Os -Wall -pedantic
 LDFLAGS=
 
-TARGET=secc_test.out
+TARGET=secc_test
 
 SOURCES=\
-    secc_test.c\
+	secc_test.c\
+	../client.c\
 
 HEADERS=\
 
@@ -14,22 +15,16 @@ OBJECTS=\
     $(SOURCES:.c=.o)\
 
 LIBS=\
-../../../libnikolav2g.a\
--lmultitask\
--lOpenV2G\
--lmbedtls\
--lm\
--lrt\
--lpthread\
+	-L../..\
+	-lnikolav2g\
+	-lmultitask\
+	-lOpenV2G\
+	-lpolarssl\
+	-lm\
+	-lrt\
+	-lpthread\
 
-INCLUDES=\
-    -I../../\
-    -I../../../\
-    -I../../../utils/libmultitask/unix\
-    -I../../../utils/OpenV2G_0.9.3/src/codec\
-    -I../../../utils/OpenV2G_0.9.3/src/appHandshake\
-    -I../../../utils/OpenV2G_0.9.3/src/transport\
-    -I../../../utils/OpenV2G_0.9.3/src/xmldsig\
+INCLUDES=-I../..
 
 .c.o:
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $<
@@ -39,3 +34,5 @@ $(TARGET): $(OBJECTS)
 
 clean:
 	rm -f $(OBJECTS) $(TARGET)
+
+all: $(TARGET)

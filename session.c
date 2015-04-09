@@ -2,11 +2,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "multitask.h"
-#include "map.h"
+#include <multitask.h>
 #include <inttypes.h>
 #include <unistd.h>
 #include "nikolav2g.h"
+#include "map.h"
+
 Map session_map;
 QLock session_map_mutex;
 

@@ -1,5 +1,6 @@
 CC=clang
 AR=ar
+MAKE=make
 CFLAGS=-g -Os -Wall -pedantic
 
 PREFIX=/usr/local
@@ -11,6 +12,13 @@ HEADER=nikolav2g.h
 
 SOURCES=$(wildcard *.c)
 OBJECTS=$(SOURCES:.c=.o)
+
+all: lib example
+
+lib: $(TARGET)
+
+example: lib
+	$(MAKE) -C example
 
 $(TARGET): $(OBJECTS)
 	$(AR) rcs $(TARGET) $(OBJECTS)
@@ -26,5 +34,6 @@ install: $(TARGET)
 
 clean:
 	rm -f $(OBJECTS) $(TARGET)
+	$(MAKE) -C example clean
 
-.PHONY: install clean
+.PHONY: all lib example install clean
