@@ -6,8 +6,9 @@
 #include "polarssl/x509.h"
 #include "polarssl/ssl.h"
 #include "polarssl/entropy.h"
-#ifndef SECC_H
-#define SECC_H 1
+
+#ifndef _NIKOLAV2G_H
+#define _NIKOLAV2G_H
 
 // Verbose flag (set before running anything in this library):
 extern int chattyv2g;
@@ -76,11 +77,12 @@ struct secc_session{
     int refcount;
     enum session_status status;
     void *data;
+    void (*data_cleanup)(session_t *); // Cleanup function, autocalled upon destruction
 };
 
 int gen_random_data(void *dest, size_t dest_len);
 int init_sessions();
-session_t *session_new();
+session_t *session_new(size_t session_data_size, void (*data_cleanup)(session_t *));
 session_t *session_lookup(uint64_t sessionid);
 session_t *session_lookup_exi(struct v2gEXIDocument *exiIn);
 void session_lock(session_t *session);

@@ -31,6 +31,14 @@ struct session_data {
     } contract;
 };
 
+void session_data_cleanup(session_t *s) {
+    session_data_t *sd = (session_data_t*)&s->data;
+    // The mbed TLS functions inherently checks for NULL pointers
+    // so no need to check for that:
+    x509_crt_free(&sd->contract.crt);
+    ecdsa_free(&sd->contract.pubkey);
+}
+
 const v2gEnergyTransferModeType ENERGY_TRANSFER_MODES[] =
 { 	v2gEnergyTransferModeType_AC_single_phase_core,
 	v2gEnergyTransferModeType_AC_three_phase_core,
@@ -340,6 +348,7 @@ static int handle_payment_detail(struct v2gEXIDocument *exiIn,
     }
     // === For the contract certificate, the certificate chain should be checked ===
     if (sd->payment_type == v2gpaymentOptionType_Contract) {
+        x509_crt_init(&sd->contract.crt);
         err = x509_crt_parse(&sd->contract.crt,
                              req->ContractSignatureCertChain.Certificate.bytes,
                              req->ContractSignatureCertChain.Certificate.bytesLen);
@@ -729,11 +738,13 @@ static int create_response_message(struct v2gEXIDocument *exiIn, struct v2gEXIDo
 	}
     // === Fetch the session ===
     if (exiIn->V2G_Message.Body.SessionSetupReq_isUsed) {
-	    s =  session_new(sizeof(session_data_t));
+	    s = session_new(sizeof(session_data_t), &session_data_cleanup);
 	    printf("New Session id = %lu", s->id);
     } else {
         s = session_lookup_exi(exiIn);
     }
+    // Note that the session can be NULL, thus this must be
+    // check in the individual response functions
     sd = (session_data_t*)&s->data;
     // === Inititialize request handling ===
     session_lock(s);

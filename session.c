@@ -97,7 +97,7 @@ session_t *session_lookup(uint64_t sessionid)
     return *sessionpp;
 }
 
-session_t *session_new(size_t session_data_size)
+session_t *session_new(size_t session_data_size, void (*data_cleanup)(session_t *))
 {
     union Key k;
     // Must be hex binary
@@ -120,6 +120,7 @@ session_t *session_new(size_t session_data_size)
     (*sessionpp)->id = k.u64;
     (*sessionpp)->status = SESSION_ACTIVE;
     (*sessionpp)->refcount = 1;
+    (*sessionpp)->data_cleanup = data_cleanup;
     return *sessionpp;
 }
 
@@ -154,6 +155,9 @@ void session_remove_ref(session_t *session)
     session_lock(session);
     session->refcount--;
     if (session->refcount == 0 && session->status == SESSION_TERMINATED) {
+        if (session->data_cleanup != NULL) {
+            session->data_cleanup(session);
+        }
         free(session);
         if (chattyv2g) fprintf(stderr, "Succesfully freed session\n");
     } else if (session->refcount < 0) {
