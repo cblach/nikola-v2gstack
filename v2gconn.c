@@ -684,7 +684,6 @@ int secc_handle_request(comboconn_t *cconn, Chan *tc,
         .capacity = 0, // Set to 8 for send and 0 for recv
     };
     int err;
-    tchanset(tc, (uvlong)V2G_SECC_Sequence_Timeout * TIME_SECOND);
     err = comboreadn(cconn, buf, V2GTP_HEADER_LENGTH, tc);
     if (err != 0) {
         if (chattyv2g) fprintf(stderr, "secc_handle_request: sslreadn error\n");
@@ -711,6 +710,7 @@ int secc_handle_request(comboconn_t *cconn, Chan *tc,
         if (chattyv2g) fprintf(stderr, "secc_handle_request: handle decoding error\n");
         return -1;
     }
+    memset(&exi_out, 0, sizeof(exi_out));
     // === Call the user-defined handle function ===
     err = handle_func(&exi_in, &exi_out);
     if (err != 0) {
@@ -764,6 +764,7 @@ void secc_handle_tcp(void *vargs)
         goto exit;
     }
     for(;;) {
+        tchanset(&tc, (uvlong)V2G_SECC_Sequence_Timeout * TIME_SECOND);
         err = secc_handle_request(&cconn, &tc, handle_func);
         if (err != 0) {
             break;
@@ -774,6 +775,7 @@ void secc_handle_tcp(void *vargs)
         shutdown(sockfd, 2);
         close(sockfd);
     }
+    chanfree(&tc);
 }
 
 // === Handle a single TLS connection ===
@@ -852,6 +854,7 @@ void secc_handle_tls(void *arg)
         goto exit;
     }
     for(;;) {
+        tchanset(&tc, (uvlong)V2G_SECC_Sequence_Timeout * TIME_SECOND);
         err = secc_handle_request(&cconn, &tc, tlsp->handle_func);
         if (err != 0) {
             break;

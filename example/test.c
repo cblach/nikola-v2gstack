@@ -95,7 +95,7 @@ static void ev(const char *if_name)
         return;
     }
     printf("Charging (repeating charging status requests)\n");
-    for (int i = 0;i < 10; i++) {
+    for (int i = 0;i < 1; i++) {
         err = charging_status_request(&conn, &s);
         if (err != 0) {
             printf("ev_example: charging_status_request err\n");

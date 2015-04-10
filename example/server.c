@@ -565,6 +565,7 @@ static int handle_charge_parameters(struct v2gEXIDocument *exiIn,
 	SetMaxPowerEntry(sched, 300, 10000, 100),
 
     // === Sales tariffes ===
+    tuple->SalesTariff.SalesTariffDescription_isUsed = 1u;
 	tuple->SalesTariff.NumEPriceLevels=2;
 	tuple->SalesTariff.NumEPriceLevels_isUsed = 1u;
 	tuple->SalesTariff.SalesTariffID=20;
