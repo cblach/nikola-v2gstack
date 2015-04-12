@@ -243,7 +243,7 @@ static int verify_response_code(v2gresponseCodeType code)
 
 void init_v2g_request(struct v2gEXIDocument *exiIn, ev_session_t *s)
 {
-    //memset(exiIn, 0, sizeof(*exiIn));
+    memset(exiIn, 0, sizeof(*exiIn));
     init_v2gEXIDocument(exiIn);
 	exiIn->V2G_Message_isUsed = 1u;
 	init_v2gMessageHeaderType(&exiIn->V2G_Message.Header);

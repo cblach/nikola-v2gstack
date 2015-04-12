@@ -732,7 +732,6 @@ int create_response_message(struct v2gEXIDocument *exiIn, struct v2gEXIDocument 
     session_t *s;
     session_data_t *sd;
 	/* create response message as EXI document */
-	printf("ismessage %u, issessionsetup %u\n", exiIn->V2G_Message_isUsed, exiIn->V2G_Message.Body.SessionSetupReq_isUsed);
 	if (!exiIn->V2G_Message_isUsed) {
 	    printf("V2GMessage not used\n");
 	    return -1;
@@ -757,7 +756,7 @@ int create_response_message(struct v2gEXIDocument *exiIn, struct v2gEXIDocument 
 	    init_v2gSessionSetupResType(&exiOut->V2G_Message.Body.SessionSetupRes);
 		err = handle_session_setup(exiIn, exiOut, s, sd);
 	}
-	if (exiIn->V2G_Message.Body.ServiceDiscoveryReq_isUsed) {
+	else if (exiIn->V2G_Message.Body.ServiceDiscoveryReq_isUsed) {
 		printf("Handling service discovery request\n");
 		exiOut->V2G_Message.Body.ServiceDiscoveryRes_isUsed = 1u;
 	    init_v2gServiceDiscoveryResType(&exiOut->V2G_Message.Body.ServiceDiscoveryRes);
@@ -804,11 +803,15 @@ int create_response_message(struct v2gEXIDocument *exiIn, struct v2gEXIDocument 
 	    exiOut->V2G_Message.Body.SessionStopRes_isUsed = 1u;
 	    init_v2gSessionStopResType(&exiOut->V2G_Message.Body.SessionStopRes);
 	    err = handle_session_stop(exiIn, exiOut, s, sd);
+	    printf("Done Handling session stop request\n");
 	} else {
 	    printf("create_response_message: request type not found\n");
 	}
+	printf("unlock session\n");
 	session_unlock(s);
+	printf("remove ref\n");
 	session_remove_ref(s);
+	printf("check err\n");
 	if (err != 0) {
         printf("Handle request returning %d\n", err);
     }

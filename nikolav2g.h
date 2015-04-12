@@ -76,8 +76,9 @@ struct secc_session{
     QLock mutex;
     int refcount;
     enum session_status status;
+    void (*data_cleanup)(session_t *);
     void *data;
-    void (*data_cleanup)(session_t *); // Cleanup function, autocalled upon destruction
+ // Cleanup function, autocalled upon destruction
 };
 
 int gen_random_data(void *dest, size_t dest_len);

@@ -611,7 +611,7 @@ int handle_handshake (comboconn_t *cconn, Chan *tc)
         if (chattyv2g) fprintf(stderr, "handle_handshake: invalid v2gtp header\n");
         return -1;
     }
-    if (payload_len + V2GTP_HEADER_LENGTH > BUFFER_SIZE) {
+    if ((size_t)payload_len + V2GTP_HEADER_LENGTH > BUFFER_SIZE) {
         if (chattyv2g) fprintf(stderr, "Buffer too small for request\n");
         return -1;
     }
@@ -694,7 +694,7 @@ int secc_handle_request(comboconn_t *cconn, Chan *tc,
         if (chattyv2g) fprintf(stderr, "secc_handle_request error: read_v2gtpHeader\n");
         return -1;
     }
-    if (payload_len + V2GTP_HEADER_LENGTH > BUFFER_SIZE) {
+    if ((size_t)payload_len + V2GTP_HEADER_LENGTH > BUFFER_SIZE) {
         if (chattyv2g) fprintf(stderr, "secc_handle_request error: Buffer too small for request\n");
         return -1;
     }
@@ -1046,8 +1046,8 @@ static void evcc_kill_conn (evcc_conn_t *conn)
 ssize_t v2g_raw_request(evcc_conn_t *conn, byte *buffer,
                         size_t request_len, size_t buffer_len, uvlong timeout_ns)
 {
-    int err;
-    ssize_t response_len;
+    ssize_t err;
+    ssize_t response_len = -1;
     Chan tc;
     Alt alts[3];
     err = tchaninit(&tc);
@@ -1079,7 +1079,7 @@ ssize_t v2g_raw_request(evcc_conn_t *conn, byte *buffer,
 		.buffer_len = buffer_len,
 		.next = NULL,
 	};
-	chaninit(&breq.wake_chan, sizeof(int), 1);
+	chaninit(&breq.wake_chan, sizeof(ssize_t), 1);
 	push_blocking_request(conn, &breq);
     qunlock(&conn->mutex);
     alts[0].c = &breq.wake_chan;
@@ -1097,7 +1097,7 @@ ssize_t v2g_raw_request(evcc_conn_t *conn, byte *buffer,
             evcc_kill_conn(conn);
             // Wait until stream_reader is done to avoid race conditions
             chanrecv(&breq.wake_chan, &err);
-            response_len = -1;
+            //response_len = -1;
             break;
         default:
             if (chattyv2g) fprintf(stderr, "critical error at v2g_raw_request: alt error\n");
@@ -1152,7 +1152,7 @@ int v2g_handshake_request(evcc_conn_t *conn)
                           V2G_EVCC_Msg_Timeout_SupportedAppProtocolReq * TIME_SECOND);
     if (len <= 0) {
         if (chattyv2g) fprintf(stderr, "v2g_handshake_request error: v2g_raw request\n");
-        return 0;
+        return -1;
     }
     // === Handle response ===
     if (chattyv2g) fprintf(stderr, "done with raw handhake request\n");
@@ -1201,18 +1201,18 @@ int v2g_request(evcc_conn_t *conn, struct v2gEXIDocument *exiIn,
 	err = serializeEXI2Stream(exiIn, &stream);
     if (err != 0) {
         if (chattyv2g) fprintf(stderr, "v2g_request error: serializeEXI2Stream\n");
-	    return err;
+	    return -1;
 	}
     len = v2g_raw_request(conn, buffer, buffer_pos, BUFFER_SIZE, req_timeout);
     if (len <= 0) {
         if (chattyv2g) fprintf(stderr, "v2g_request error: v2g_raw_request\n");
-        return 0;
+        return -1;
     }
     buffer_pos = 0;
     err = deserializeStream2EXI(&stream, exiOut);
     if (err != 0) {
         if (chattyv2g) fprintf(stderr, "v2g_request error: deserializeStream2EXI\n");
-        return 0;
+        return -1;
     }
    // if (chattyv2g) fprintf(stderr, "succesful v2g_request\n");
     return 0;
@@ -1221,40 +1221,40 @@ int v2g_request(evcc_conn_t *conn, struct v2gEXIDocument *exiIn,
 // Read responses from requests to EVSE and deliver them to requester
 static void evcc_connect_stream_reader(void *arg)
 {
-	int err, len;
+	ssize_t err, len;
     evcc_conn_t *conn = arg;
 	blocking_request_t  *breq;
 	byte header_buf[V2GTP_HEADER_LENGTH];
     for(;;) {
         uint16_t payload_len;
-        err = comboreadn(&conn->cconn, header_buf,
+        err = (ssize_t)comboreadn(&conn->cconn, header_buf,
                          V2GTP_HEADER_LENGTH, &conn->kill_chan);
         if (err < 0) {
             if (chattyv2g) fprintf(stderr,  "evcc_connect_tls_stream_reader error: sslreadn error\n");
             break;
         }
         // === Check header for response size ===
-        err = read_v2gtpHeader(header_buf, &payload_len);
+        err = (ssize_t)read_v2gtpHeader(header_buf, &payload_len);
         if (err != 0) {
             if (chattyv2g) fprintf(stderr, "evcc_connect_tls_stream_reader error: invalid v2gtp header\n");
             break;
         }
         qlock(&conn->mutex);
         // === pop the first request of the queue ===
-        err = pop_blocking_request(conn, &breq);
+        err = (ssize_t)pop_blocking_request(conn, &breq);
 		if (err != 0) {
 		    qunlock(&conn->mutex);
             if (chattyv2g) fprintf(stderr, "evcc_connect_tls_stream_reader: pop_blocking_request error\n");
             break;
         }
         qunlock(&conn->mutex);
-        if (payload_len + V2GTP_HEADER_LENGTH > breq->buffer_len) {
+        if ((size_t)payload_len + V2GTP_HEADER_LENGTH > breq->buffer_len) {
             err = -1;
             chansend(&breq->wake_chan, &err);
             if (chattyv2g) fprintf(stderr, "evcc_connect_tls_stream_reader error: Buffer too small for request\n");
             break;
         }
-        err = comboreadn(&conn->cconn, breq->buffer + V2GTP_HEADER_LENGTH,
+        err = (ssize_t)comboreadn(&conn->cconn, breq->buffer + V2GTP_HEADER_LENGTH,
                          payload_len, &conn->kill_chan);
         if (err != 0) {
             chansend(&breq->wake_chan, &err);
@@ -1262,7 +1262,7 @@ static void evcc_connect_stream_reader(void *arg)
             break;
         }
         memcpy(breq->buffer, header_buf, V2GTP_HEADER_LENGTH);
-        len = V2GTP_HEADER_LENGTH + payload_len;
+        len = V2GTP_HEADER_LENGTH + (ssize_t)payload_len;
         chansend(&breq->wake_chan, &len);
     }
     if (chattyv2g) fprintf(stderr, "disconnected\n");

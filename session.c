@@ -161,8 +161,10 @@ void session_remove_ref(session_t *session)
         }
         free(session);
         if (chattyv2g) fprintf(stderr, "Succesfully freed session\n");
+        // No need to unlock if refcount 0, since it can never increase from this point since it has been removed from the map.
     } else if (session->refcount < 0) {
-        if (chattyv2g) fprintf(stderr, "session_remove_ref: Negative session ref-count\n");
+        if (chattyv2g) fprintf(stderr, "session_remove_ref: Negative session ref-count. THIS IS BAD!\n");
+    } else {
+        session_unlock(session);
     }
-    session_unlock(session);
 }

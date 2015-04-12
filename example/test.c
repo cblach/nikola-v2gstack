@@ -32,7 +32,7 @@ static void fatal(const char *fmt, ...)
     exit(1);
 }
 
-static void ev(const char *if_name)
+static void ev(const char *if_name, bool tls_enabled)
 {
     evcc_conn_t conn;
     ev_session_t s;
@@ -42,12 +42,15 @@ static void ev(const char *if_name)
     if (load_contract("certs/contractchain.pem", "certs/contract.key", &s) != 0) {
         fatal("can't load certs/contract.key: %m");
     }
-    if (ev_sdp_discover_evse(if_name, &conn.addr, true) < 0) {
+    if (ev_sdp_discover_evse(if_name, &conn.addr, tls_enabled) < 0) {
         fatal("failed to discover EVSE on interface %s", if_name);
     }
     printf("connecting to secc\n");
-    err = evcc_connect_tls(&conn, "certs/ev.pem", "certs/ev.key");
-   //err = evcc_connect_tcp(&conn);
+    if (tls_enabled) {
+        err = evcc_connect_tls(&conn, "certs/ev.pem", "certs/ev.key");
+    } else {
+        err = evcc_connect_tcp(&conn);
+    }
     if (err != 0) {
         printf("main: evcc_connect_tls error\n");
         return;
@@ -95,7 +98,7 @@ static void ev(const char *if_name)
         return;
     }
     printf("Charging (repeating charging status requests)\n");
-    for (int i = 0;i < 1; i++) {
+    for (int i = 0;i < 2; i++) {
         err = charging_status_request(&conn, &s);
         if (err != 0) {
             printf("ev_example: charging_status_request err\n");
@@ -105,7 +108,7 @@ static void ev(const char *if_name)
         fflush(stdout);
         sleep(1);
     }
-    session_stop_request(&conn, &s);
+    err = session_stop_request(&conn, &s);
     if (err != 0) {
         printf("ev_example: session_stop_request err\n");
         return;
@@ -159,19 +162,21 @@ threadmain(int argc,
 {
     enum { EV, EVSE };
     const char *iface, *type;
-    int opt, slac = 0;
+    int opt, slac = 0, notls = 0;
 
     argv0 = argv[0];
-    while ((opt = getopt(argc, argv, "sv")) != -1) {
+    while ((opt = getopt(argc, argv, "svn")) != -1) {
         switch (opt) {
         case 's':
            slac++;
-            break;
+           break;
 
         case 'v':
             chattyv2g++;
             break;
-
+        case 'n': // no tls
+            notls++;
+            break;
         default:
             usage();
         }
@@ -197,7 +202,7 @@ threadmain(int argc,
             printf("Slac is done. Waiting 8 seconds for networks to form.\n");
             sleep(8);
         }
-       ev(iface);
+       ev(iface, !notls);
     } else {
         fatal("node type must be EV or EVSE");
      }
