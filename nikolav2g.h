@@ -47,6 +47,7 @@ struct evcc_conn{
     comboconn_t cconn; // Makes it possible for either TCP or TLS
     QLock mutex;
     Chan kill_chan;
+    Chan kill_confirm_chan;
     // The connection keeps a queue of waiting requests to respond in correct order.
     blocking_request_t *first_req;
     blocking_request_t *last_req;
@@ -60,6 +61,7 @@ struct evcc_conn{
 
 int evcc_connect_tls(evcc_conn_t *conn, const char *crt_path, const char *key_path);
 int evcc_connect_tcp(evcc_conn_t *conn);
+void evcc_close_conn (evcc_conn_t *conn);
 
 int v2g_request(evcc_conn_t *conn, struct v2gEXIDocument *exiIn, struct v2gEXIDocument *exiOut);
 

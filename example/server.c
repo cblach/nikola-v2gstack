@@ -803,15 +803,11 @@ int create_response_message(struct v2gEXIDocument *exiIn, struct v2gEXIDocument 
 	    exiOut->V2G_Message.Body.SessionStopRes_isUsed = 1u;
 	    init_v2gSessionStopResType(&exiOut->V2G_Message.Body.SessionStopRes);
 	    err = handle_session_stop(exiIn, exiOut, s, sd);
-	    printf("Done Handling session stop request\n");
 	} else {
 	    printf("create_response_message: request type not found\n");
 	}
-	printf("unlock session\n");
 	session_unlock(s);
-	printf("remove ref\n");
 	session_remove_ref(s);
-	printf("check err\n");
 	if (err != 0) {
         printf("Handle request returning %d\n", err);
     }

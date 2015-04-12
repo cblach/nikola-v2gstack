@@ -1033,13 +1033,23 @@ int pop_blocking_request (evcc_conn_t *conn,
     return 0;
 }
 
-static void evcc_kill_conn (evcc_conn_t *conn)
+void evcc_close_conn (evcc_conn_t *conn)
 {
     int kill_sig = 0;
     chansendnb(&conn->kill_chan, &kill_sig);
     qlock(&conn->mutex);
     conn->alive = false;
     qunlock(&conn->mutex);
+    chanrecv(&conn->kill_confirm_chan, NULL);
+    chanfree(&conn->kill_chan);
+    chanfree(&conn->kill_confirm_chan);
+    x509_crt_free(&conn->cacert);
+    pk_free(&conn->pkey);
+    ssl_free(&conn->cconn.ssl);
+    ctr_drbg_free(&conn->ctr_drbg);
+    entropy_free(&conn->entropy);
+    shutdown(conn->cconn.sockfd, 2);
+    close(conn->cconn.sockfd);
 }
 
 // Commit a raw (byte) request to a tls connection
@@ -1061,7 +1071,7 @@ ssize_t v2g_raw_request(evcc_conn_t *conn, byte *buffer,
         if (chattyv2g) fprintf(stderr, "v2g_raw_request: cannot send request, connection dead\n");
         conn->alive = false;
         qunlock(&conn->mutex);
-        evcc_kill_conn(conn);
+        evcc_close_conn(conn);
         chanfree(&tc);
         return -1;
     }
@@ -1070,7 +1080,7 @@ ssize_t v2g_raw_request(evcc_conn_t *conn, byte *buffer,
         if (chattyv2g) fprintf(stderr, "v2g_raw_request: sslwriten\n");
         conn->alive = false;
         qunlock(&conn->mutex);
-        evcc_kill_conn(conn);
+        evcc_close_conn(conn);
         chanfree(&tc);
         return -1;
     }
@@ -1094,7 +1104,7 @@ ssize_t v2g_raw_request(evcc_conn_t *conn, byte *buffer,
             break;
         case 1:
             if (chattyv2g) fprintf(stderr, "v2g_raw_request: timeout\n");
-            evcc_kill_conn(conn);
+            evcc_close_conn(conn);
             // Wait until stream_reader is done to avoid race conditions
             chanrecv(&breq.wake_chan, &err);
             //response_len = -1;
@@ -1103,6 +1113,7 @@ ssize_t v2g_raw_request(evcc_conn_t *conn, byte *buffer,
             if (chattyv2g) fprintf(stderr, "critical error at v2g_raw_request: alt error\n");
             abort();
     }
+    chanfree(&breq.wake_chan);
     chanfree(&tc);
     return response_len;
 }
@@ -1274,14 +1285,7 @@ static void evcc_connect_stream_reader(void *arg)
     }
     qunlock(&conn->mutex);
     // === Free connection ===
-    chanfree(&conn->kill_chan);
-    x509_crt_free(&conn->cacert);
-    pk_free(&conn->pkey);
-    ssl_free(&conn->cconn.ssl);
-    ctr_drbg_free(&conn->ctr_drbg);
-    entropy_free(&conn->entropy);
-    shutdown(conn->cconn.sockfd, 2);
-    close(conn->cconn.sockfd);
+    chansend(&conn->kill_confirm_chan, NULL);
 }
 
 int init_evcc_conn(evcc_conn_t *conn, bool tls_enabled) {
@@ -1308,6 +1312,7 @@ int evcc_connect_tcp (evcc_conn_t *conn)
     }
     // === Init ===
     chaninit(&conn->kill_chan, sizeof(int), 1);
+    chaninit(&conn->kill_confirm_chan, sizeof(int), 1);
     err = connect (conn->cconn.sockfd, (struct sockaddr*)&conn->addr,
                    sizeof (struct sockaddr_in6));
     if (err != 0) {

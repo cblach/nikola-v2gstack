@@ -20,7 +20,7 @@ struct ev_session{
         ctr_drbg_context ctr_drbg;
     } contract;
 };
-
+void evcc_session_cleanup(ev_session_t* s);
 int load_contract(const char *pemchain_path, const char *keyfile_path, ev_session_t *s);
 int sign_auth_request(struct v2gAuthorizationReqType *req,
                       ecdsa_context *key,

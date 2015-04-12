@@ -108,11 +108,14 @@ static void ev(const char *if_name, bool tls_enabled)
         fflush(stdout);
         sleep(1);
     }
+    printf("Performing session stop request\n");
     err = session_stop_request(&conn, &s);
     if (err != 0) {
         printf("ev_example: session_stop_request err\n");
         return;
     }
+    evcc_close_conn(&conn);
+    evcc_session_cleanup(&s);
     printf("Finished charging, ending session\n");
 }
 

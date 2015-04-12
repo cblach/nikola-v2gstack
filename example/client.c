@@ -19,6 +19,12 @@
 //            Utility Functions
 //=========================================
 
+void evcc_session_cleanup(ev_session_t* s) {
+    ctr_drbg_free(&s->contract.ctr_drbg);
+    ecdsa_free(&s->contract.key);
+    entropy_free(&s->contract.entropy);
+}
+
 int load_contract(const char *pemchain_path,
                   const char *keyfile_path,
                   ev_session_t *s) {
@@ -62,6 +68,7 @@ int load_contract(const char *pemchain_path,
         return -1;
     }
     ecp_keypair *kp = pk_ec(pk);
+    ecdsa_free(&s->contract.key); // Free, if existing already
     err = ecdsa_from_keypair(&s->contract.key, kp);
     pk_free(&pk);
     if (err != 0) {
@@ -110,6 +117,7 @@ int sign_auth_request(struct v2gAuthorizationReqType *req,
     //      Create signature
     //=======================================
     struct xmldsigEXIFragment sig_fragment;
+    memset(&sig_fragment, 0, sizeof(sig_fragment));
     struct xmldsigReferenceType *ref = &sig_fragment.SignedInfo.Reference.array[0];
     char uri[4] = {"#ID1"};
 	char arrayCanonicalEXI[35] = {"http://www.w3.org/TR/canonical-exi/"};

@@ -214,7 +214,7 @@ int ev_sdp_discover_evse(const char *if_name,
                          struct sockaddr_in6 *evse_addr,
                          bool tls_enabled)
 {
-    int sock, err;
+    int sock = 0, err = -1;
     ssize_t ret;
     struct sockaddr_in6 dest;
     Chan *iocr = iochan(1048576 - PTHREAD_STACK_MIN);
@@ -226,19 +226,13 @@ int ev_sdp_discover_evse(const char *if_name,
     ioargs_t rargs, wargs;
 	if (iocr == NULL || iocw == NULL) {
 	    if (chattyv2g) fprintf(stderr, "slac_sendrecvloop: iochan error\n");
-	    if (iocr != NULL) {
-	        chanfree(iocr);
-	    }
-	    if (iocw != NULL) {
-	        chanfree(iocw);
-	    }
-	    return -1;
+	    goto exit;
 	}
     // === Get interface index ===
     if_index = if_nametoindex(if_name);
     if (if_index == 0) {
         if (chattyv2g) fprintf(stderr, "%s: %m\n", "interface_index");
-        return -1;
+        goto exit;
     }
     evse_addr->sin6_family = AF_INET6;
     evse_addr->sin6_scope_id = if_index;
@@ -246,14 +240,13 @@ int ev_sdp_discover_evse(const char *if_name,
     if (chattyv2g) fprintf(stderr, "Setting up socket\n");
     sock = socket(AF_INET6, SOCK_DGRAM, IPPROTO_UDP);
     if (sock < 0) {
-        return -1;
+        goto exit;
     }
     // === Specify the socket used for multicast ===
     err = setsockopt(sock, IPPROTO_IPV6, IPV6_MULTICAST_IF, &if_index, sizeof(if_index));
     if (err < 0) {
         if (chattyv2g) fprintf(stderr, "%s: %m\n", "setsockopt");
-        close(sock);
-        return -1;
+        goto exit;
     }
     // === Send the multicast message ===
     memset((char *)&dest, 0, sizeof(dest));
@@ -278,15 +271,21 @@ int ev_sdp_discover_evse(const char *if_name,
             break;
         case 1: // Done writing and no response -> error
             iocancel(iocr);
-            err = -1;
             break;
         default:
             if (chattyv2g) fprintf(stderr, "critical ev_sdp_discover_evse: alt error\n");
             abort();
     }
-    chanfree(iocr);
-    chanfree(iocw);
-    close(sock);
+    exit:
+	if (iocr != NULL) {
+	    chanfree(iocr);
+	}
+	if (iocw != NULL) {
+	    chanfree(iocw);
+	}
+    if (sock > 0) {
+        close(sock);
+    }
     return err;
 }
 

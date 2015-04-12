@@ -483,7 +483,7 @@ int slac_associate(const char *if_name)
     static uint8_t runid_counter = 0;
     err = ethdial(&ethconn, if_name, ETH_P_HPAV);
     if (err != 0) {
-        printf("ethdial err\n");
+        printf("ethdial err %m\n");
         return -1;
     }
     memset(&ses, 0, sizeof(ses));
