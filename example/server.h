@@ -1,6 +1,6 @@
 #ifndef SERVER_H
 #define SERVER_H
-
+extern int secc_free_charge;
 #include <OpenV2G/v2gEXIDatatypes.h>
 #include <polarssl/x509.h>
 

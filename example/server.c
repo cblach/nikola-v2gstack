@@ -10,6 +10,7 @@
 #include <math.h>
 #include <polarssl/error.h>
 #include "server.h"
+int secc_free_charge = 0;
 
 typedef struct session_data session_data_t;
 struct session_data {
@@ -282,7 +283,7 @@ static int handle_service_discovery(struct v2gEXIDocument *exiIn,
 	res->ChargeService.ServiceName.characters[6] = '\0';
 	res->ChargeService.ServiceName.charactersLen = 6;
 	res->ChargeService.ServiceScope_isUsed = 1u;
-	res->ChargeService.FreeService = 1;
+	res->ChargeService.FreeService = secc_free_charge && 1;
 	res->ChargeService.ServiceCategory = v2gserviceCategoryType_EVCharging;
 	res->ChargeService.ServiceScope_isUsed = 1u;
 	res->ChargeService.ServiceScope.characters[0] = 100;
@@ -329,6 +330,7 @@ static int payment_service_selection(struct v2gEXIDocument *exiIn,
     }
     res->ResponseCode = v2gresponseCodeType_OK;
     sd->payment_type = req->SelectedPaymentOption;
+    sd->verified = secc_free_charge && 1;
     return 0;
 }
 
@@ -347,72 +349,74 @@ static int handle_payment_detail(struct v2gEXIDocument *exiIn,
         return 0;
     }
     // === For the contract certificate, the certificate chain should be checked ===
-    if (sd->payment_type == v2gpaymentOptionType_Contract) {
-        x509_crt_init(&sd->contract.crt);
-        err = x509_crt_parse(&sd->contract.crt,
-                             req->ContractSignatureCertChain.Certificate.bytes,
-                             req->ContractSignatureCertChain.Certificate.bytesLen);
-        if (err != 0) {
-            memset(res, 0, sizeof(*res));
-            res->ResponseCode = v2gresponseCodeType_FAILED_CertChainError;
-            printf("handle_payment_detail: invalid certififcate received in req\n");
-            return 0;
-        }
-        if (req->ContractSignatureCertChain.SubCertificates_isUsed) {
-            for (i = 0; i < req->ContractSignatureCertChain.SubCertificates.Certificate.arrayLen; i++) {
-//	printf("%s\n %u %u\n", req->ContractSignatureCertChain.SubCertificates.Certificate.array[0].bytes, req->ContractSignatureCertChain.SubCertificates.Certificate.array[i].bytesLen, req->ContractSignatureCertChain.SubCertificates.Certificate.arrayLen);
-                err = x509_crt_parse(&sd->contract.crt,
-                                     req->ContractSignatureCertChain.SubCertificates.Certificate.array[i].bytes,
-                                     req->ContractSignatureCertChain.SubCertificates.Certificate.array[i].bytesLen);
-                if (err != 0) {
-                    memset(res, 0, sizeof(*res));
-                    res->ResponseCode = v2gresponseCodeType_FAILED_CertChainError;
-                    printf("handle_payment_detail: invalid subcertififcate received in req\n");
-                    return 0;
-                }
+    if (!secc_free_charge) {
+        if (sd->payment_type == v2gpaymentOptionType_Contract) {
+            x509_crt_init(&sd->contract.crt);
+            err = x509_crt_parse(&sd->contract.crt,
+                                 req->ContractSignatureCertChain.Certificate.bytes,
+                                 req->ContractSignatureCertChain.Certificate.bytesLen);
+            if (err != 0) {
+                memset(res, 0, sizeof(*res));
+                res->ResponseCode = v2gresponseCodeType_FAILED_CertChainError;
+                printf("handle_payment_detail: invalid certififcate received in req\n");
+                return 0;
+            }
+            if (req->ContractSignatureCertChain.SubCertificates_isUsed) {
+                for (i = 0; i < req->ContractSignatureCertChain.SubCertificates.Certificate.arrayLen; i++) {
+    //	printf("%s\n %u %u\n", req->ContractSignatureCertChain.SubCertificates.Certificate.array[0].bytes, req->ContractSignatureCertChain.SubCertificates.Certificate.array[i].bytesLen, req->ContractSignatureCertChain.SubCertificates.Certificate.arrayLen);
+                    err = x509_crt_parse(&sd->contract.crt,
+                                         req->ContractSignatureCertChain.SubCertificates.Certificate.array[i].bytes,
+                                         req->ContractSignatureCertChain.SubCertificates.Certificate.array[i].bytesLen);
+                    if (err != 0) {
+                        memset(res, 0, sizeof(*res));
+                        res->ResponseCode = v2gresponseCodeType_FAILED_CertChainError;
+                        printf("handle_payment_detail: invalid subcertififcate received in req\n");
+                        return 0;
+                    }
 
+                }
             }
-        }
-        // Convert the public key in the certificate to an mbed TLS ECDSA public key
-        // This also verifies that it's an ECDSA key and not an RSA key
-        err = ecdsa_from_keypair(&sd->contract.pubkey, pk_ec(sd->contract.crt.pk));
-        if (err != 0) {
-            memset(res, 0, sizeof(*res));
-            res->ResponseCode = v2gresponseCodeType_FAILED_CertChainError;
-            char strerr[256];
-            error_strerror(err, strerr, 256);
-            printf("handle_payment_detail: could not retrieve ecdsa public key from certificate keypair: %s\n", strerr);
-            return 0;
-        }
-        // === Verify the retrieved contract ECDSA key against the root cert ===
-        err = x509_crt_verify(&sd->contract.crt, &Trusted_contract_rootcert_chain,
-                              NULL, NULL, &flags, NULL, NULL);
-        if (err != 0) {
-            printf("handle_payment_detail: contract certificate verify problem, ");
-            if (err == POLARSSL_ERR_X509_CERT_VERIFY_FAILED) {
-                if (flags & BADCERT_CN_MISMATCH)
-                    printf("CN_MISMATCH\n");
-                if (flags & BADCERT_EXPIRED)
-                    printf("EXPIRED\n");
-                if (flags & BADCERT_REVOKED)
-                    printf("REVOKED\n");
-                if (flags & BADCERT_NOT_TRUSTED)
-                    printf("NOT_TRUSTED\n");
-                if (flags & BADCRL_NOT_TRUSTED)
-                    printf("CRL_NOT_TRUSTED\n");
-                if (flags & BADCRL_EXPIRED)
-                    printf("CRL_EXPIRED\n");
-            } else {
-                printf(" failed\n  !  x509_crt_verify returned %d\n", err);
+            // Convert the public key in the certificate to an mbed TLS ECDSA public key
+            // This also verifies that it's an ECDSA key and not an RSA key
+            err = ecdsa_from_keypair(&sd->contract.pubkey, pk_ec(sd->contract.crt.pk));
+            if (err != 0) {
+                memset(res, 0, sizeof(*res));
+                res->ResponseCode = v2gresponseCodeType_FAILED_CertChainError;
+                char strerr[256];
+                error_strerror(err, strerr, 256);
+                printf("handle_payment_detail: could not retrieve ecdsa public key from certificate keypair: %s\n", strerr);
+                return 0;
             }
-            memset(res, 0, sizeof(*res));
-            res->ResponseCode = v2gresponseCodeType_FAILED_CertChainError;
-            return 0;
+            // === Verify the retrieved contract ECDSA key against the root cert ===
+            err = x509_crt_verify(&sd->contract.crt, &Trusted_contract_rootcert_chain,
+                                  NULL, NULL, &flags, NULL, NULL);
+            if (err != 0) {
+                printf("handle_payment_detail: contract certificate verify problem, ");
+                if (err == POLARSSL_ERR_X509_CERT_VERIFY_FAILED) {
+                    if (flags & BADCERT_CN_MISMATCH)
+                        printf("CN_MISMATCH\n");
+                    if (flags & BADCERT_EXPIRED)
+                        printf("EXPIRED\n");
+                    if (flags & BADCERT_REVOKED)
+                        printf("REVOKED\n");
+                    if (flags & BADCERT_NOT_TRUSTED)
+                        printf("NOT_TRUSTED\n");
+                    if (flags & BADCRL_NOT_TRUSTED)
+                        printf("CRL_NOT_TRUSTED\n");
+                    if (flags & BADCRL_EXPIRED)
+                        printf("CRL_EXPIRED\n");
+                } else {
+                    printf(" failed\n  !  x509_crt_verify returned %d\n", err);
+                }
+                memset(res, 0, sizeof(*res));
+                res->ResponseCode = v2gresponseCodeType_FAILED_CertChainError;
+                return 0;
+            }
+            gen_random_data(sd->challenge, 16);
+            memcpy(res->GenChallenge.bytes, sd->challenge, 16);
+          	res->GenChallenge.bytesLen = 16;
+          	sd->contract.valid_crt = true;
         }
-        gen_random_data(sd->challenge, 16);
-        memcpy(res->GenChallenge.bytes, sd->challenge, 16);
-      	res->GenChallenge.bytesLen = 16;
-      	sd->contract.valid_crt = true;
     }
     res->ResponseCode = v2gresponseCodeType_OK;
 	res->EVSETimeStamp = time(NULL);
@@ -433,88 +437,97 @@ static int handle_authorization(struct v2gEXIDocument *exiIn,
         printf("handle_authorization: unknown session\n");
         return 0;
     }
-    if (sd->payment_type == v2gpaymentOptionType_Contract &&
-        sd->contract.valid_crt == true) {
-        if (req->GenChallenge_isUsed == 0 || req->GenChallenge.bytesLen != 16
-            || memcmp(req->GenChallenge.bytes,sd->challenge, 16) != 0) {
-            printf("handle_authorization: challenge invalid or not present\n");
-            res->ResponseCode = v2gresponseCodeType_FAILED_ChallengeInvalid;
+    if (!secc_free_charge) {
+        if (sd->payment_type == v2gpaymentOptionType_Contract &&
+            sd->contract.valid_crt == true) {
+            if (req->GenChallenge_isUsed == 0 || req->GenChallenge.bytesLen != 16
+                || memcmp(req->GenChallenge.bytes,sd->challenge, 16) != 0) {
+                printf("handle_authorization: challenge invalid or not present\n");
+                res->ResponseCode = v2gresponseCodeType_FAILED_ChallengeInvalid;
+                return 0;
+            }
+            if (exiIn->V2G_Message.Header.Signature_isUsed == 0) {
+                printf("handle_authorization: missing signture\n");
+                res->ResponseCode = v2gresponseCodeType_FAILED_SignatureError;
+                return 0;
+            }
+            //===================================
+            //    Validate signature -  PART 1/2
+            //===================================
+            struct v2gSignatureType *sig = &exiIn->V2G_Message.Header.Signature;
+            unsigned char buf[256];
+            uint16_t buffer_pos = 0;
+            struct v2gReferenceType *req_ref = &sig->SignedInfo.Reference.array[0];
+            bitstream_t stream = {
+                .size = 256,
+                .data = buf,
+                .pos  = &buffer_pos,
+                .buffer = 0,
+                .capacity = 8, // Set to 8 for send and 0 for recv
+            };
+            struct v2gEXIFragment auth_fragment;
+            uint8_t digest[32];
+            init_v2gEXIFragment(&auth_fragment);
+            auth_fragment.AuthorizationReq_isUsed = 1u;
+            memcpy(&auth_fragment.AuthorizationReq, req, sizeof(*req));
+            err = encode_v2gExiFragment(&stream, &auth_fragment);
+            if (err != 0) {
+                printf("handle_authorization: unable to encode auth fragment\n");
+                return -1;
+            }
+            sha256(buf, (size_t)buffer_pos, digest, 0);
+            if (req_ref->DigestValue.bytesLen != 32
+                || memcmp(req_ref->DigestValue.bytes, digest, 32) != 0) {
+                printf("handle_authorization: invalid digest\n");
+                res->ResponseCode = v2gresponseCodeType_FAILED_SignatureError;
+                return 0;
+            }
+            //===================================
+            //    Validate signature -  PART 2/2
+            //===================================
+            struct xmldsigEXIFragment sig_fragment;
+            init_xmldsigEXIFragment(&sig_fragment);
+	        sig_fragment.SignedInfo_isUsed = 1;
+	        memcpy(&sig_fragment.SignedInfo, &sig->SignedInfo,
+	               sizeof(struct v2gSignedInfoType));
+            buffer_pos = 0;
+	        err = encode_xmldsigExiFragment(&stream, &sig_fragment);
+            if (err != 0) {
+                printf("error 2: error code = %d\n", err);
+                return -1;
+            }
+            // === Hash the signature ===
+            sha256(buf, buffer_pos, digest, 0);
+            // === Validate the ecdsa signature using the public key ===
+            if (sig->SignatureValue.CONTENT.bytesLen > 350) {
+                printf("handle_authorization: signature too long\n");
+                res->ResponseCode = v2gresponseCodeType_FAILED_SignatureError;
+                return 0;
+            }
+            err = ecdsa_read_signature(&sd->contract.pubkey,
+                                       digest, 32,
+                                       sig->SignatureValue.CONTENT.bytes,
+                                       sig->SignatureValue.CONTENT.bytesLen);
+            if (err != 0) {
+                res->ResponseCode = v2gresponseCodeType_FAILED_SignatureError;
+                printf("invalid signature\n");
+                return 0;
+            }
+            sd->verified = true;
+            printf("Succesful verification of signature!!!\n");
+        } else if (sd->payment_type == v2gpaymentOptionType_ExternalPayment) {
+            if (!sd->verified) {
+                printf("Received request of external payment. External payment verification not yet implemented\n");
+                res->EVSEProcessing = v2gEVSEProcessingType_Ongoing_WaitingForCustomerInteraction;
+                res->ResponseCode = v2gresponseCodeType_OK;
+            }
+        } else {
+            printf("handle_authorization: Invalid Payment Selection");
+            res->ResponseCode = v2gresponseCodeType_FAILED_PaymentSelectionInvalid;
             return 0;
         }
-        if (exiIn->V2G_Message.Header.Signature_isUsed == 0) {
-            printf("handle_authorization: missing signture\n");
-            res->ResponseCode = v2gresponseCodeType_FAILED_SignatureError;
-            return 0;
-        }
-        //===================================
-        //    Validate signature -  PART 1/2
-        //===================================
-        struct v2gSignatureType *sig = &exiIn->V2G_Message.Header.Signature;
-        unsigned char buf[256];
-        uint16_t buffer_pos = 0;
-        struct v2gReferenceType *req_ref = &sig->SignedInfo.Reference.array[0];
-        bitstream_t stream = {
-            .size = 256,
-            .data = buf,
-            .pos  = &buffer_pos,
-            .buffer = 0,
-            .capacity = 8, // Set to 8 for send and 0 for recv
-        };
-        struct v2gEXIFragment auth_fragment;
-        uint8_t digest[32];
-        init_v2gEXIFragment(&auth_fragment);
-        auth_fragment.AuthorizationReq_isUsed = 1u;
-        memcpy(&auth_fragment.AuthorizationReq, req, sizeof(*req));
-        err = encode_v2gExiFragment(&stream, &auth_fragment);
-        if (err != 0) {
-            printf("handle_authorization: unable to encode auth fragment\n");
-            return -1;
-        }
-        sha256(buf, (size_t)buffer_pos, digest, 0);
-        if (req_ref->DigestValue.bytesLen != 32
-            || memcmp(req_ref->DigestValue.bytes, digest, 32) != 0) {
-            printf("handle_authorization: invalid digest\n");
-            res->ResponseCode = v2gresponseCodeType_FAILED_SignatureError;
-            return 0;
-        }
-        //===================================
-        //    Validate signature -  PART 2/2
-        //===================================
-        struct xmldsigEXIFragment sig_fragment;
-        init_xmldsigEXIFragment(&sig_fragment);
-	    sig_fragment.SignedInfo_isUsed = 1;
-	    memcpy(&sig_fragment.SignedInfo, &sig->SignedInfo,
-	           sizeof(struct v2gSignedInfoType));
-        buffer_pos = 0;
-	    err = encode_xmldsigExiFragment(&stream, &sig_fragment);
-        if (err != 0) {
-            printf("error 2: error code = %d\n", err);
-            return -1;
-        }
-        // === Hash the signature ===
-        sha256(buf, buffer_pos, digest, 0);
-        // === Validate the ecdsa signature using the public key ===
-        if (sig->SignatureValue.CONTENT.bytesLen > 350) {
-            printf("handle_authorization: signature too long\n");
-            res->ResponseCode = v2gresponseCodeType_FAILED_SignatureError;
-            return 0;
-        }
-        err = ecdsa_read_signature(&sd->contract.pubkey,
-                                   digest, 32,
-                                   sig->SignatureValue.CONTENT.bytes,
-                                   sig->SignatureValue.CONTENT.bytesLen);
-        if (err != 0) {
-            res->ResponseCode = v2gresponseCodeType_FAILED_SignatureError;
-            printf("invalid signature\n");
-            return 0;
-        }
-        sd->verified = true;
-        printf("Succesful verification of signature!!!\n");
-    } else {
-        printf("handle_authorization: external payment not implemented");
-        res->ResponseCode = v2gresponseCodeType_FAILED_PaymentSelectionInvalid;
-        return 0;
     }
+    res->EVSEProcessing = v2gEVSEProcessingType_Finished;
 	res->ResponseCode = v2gresponseCodeType_OK;
 	return 0;
 }
@@ -562,7 +575,7 @@ static int handle_charge_parameters(struct v2gEXIDocument *exiIn,
 	SetMaxPowerEntry(sched,   0, 20000,   0),
 	SetMaxPowerEntry(sched, 100, 25000,   0),
 	SetMaxPowerEntry(sched, 200, 15000,   0),
-	SetMaxPowerEntry(sched, 300, 10000, 100),
+	SetMaxPowerEntry(sched, 1400, 10000, 100),
 
     // === Sales tariffes ===
     tuple->SalesTariff.SalesTariffDescription_isUsed = 1u;
@@ -606,6 +619,7 @@ static int handle_charge_parameters(struct v2gEXIDocument *exiIn,
         sd->energy_transfer_mode = req->RequestedEnergyTransferMode;
         res->ResponseCode = v2gresponseCodeType_OK;
     }
+    res->EVSEProcessing = v2gEVSEProcessingType_Finished;
     return 0;
 }
 

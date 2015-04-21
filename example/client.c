@@ -210,7 +210,7 @@ static void printACEVSEStatus(struct v2gAC_EVSEStatusType *status)
 	printf("\t\tNotificationMaxDelay=%d\n", status->NotificationMaxDelay);
 }
 
-static int verify_response_code(v2gresponseCodeType code)
+int verify_response_code(v2gresponseCodeType code)
 {
     switch (code) {
     case v2gresponseCodeType_OK:
@@ -332,6 +332,7 @@ int service_discovery_request(evcc_conn_t *conn, ev_session_t *s)
         return -1;
     }
     s->charge_service_id = exiOut.V2G_Message.Body.ServiceDiscoveryRes.ChargeService.ServiceID;
+    s->charging_is_free = exiOut.V2G_Message.Body.ServiceDiscoveryRes.ChargeService.FreeService && 1;
     return 0;
 }
 
@@ -344,8 +345,9 @@ int payment_selection_request(evcc_conn_t *conn, ev_session_t *s)
 	init_v2gPaymentServiceSelectionReqType(&exiIn.V2G_Message.Body.PaymentServiceSelectionReq);
     exiIn.V2G_Message.Body.PaymentServiceSelectionReq_isUsed = 1u;
 
-
-	exiIn.V2G_Message.Body.PaymentServiceSelectionReq.SelectedPaymentOption = v2gpaymentOptionType_Contract;
+    if (!s->charging_is_free) {
+	    exiIn.V2G_Message.Body.PaymentServiceSelectionReq.SelectedPaymentOption = v2gpaymentOptionType_Contract;
+	}
 	exiIn.V2G_Message.Body.PaymentServiceSelectionReq.SelectedServiceList.SelectedService.arrayLen = 1; // === only one service was selected ===
 	exiIn.V2G_Message.Body.PaymentServiceSelectionReq.SelectedServiceList.SelectedService.array[0].ServiceID = s->charge_service_id; // charge server ID
 	exiIn.V2G_Message.Body.PaymentServiceSelectionReq.SelectedServiceList.SelectedService.array[0].ParameterSetID_isUsed = 0u; // is not used
@@ -392,7 +394,7 @@ int payment_details_request(evcc_conn_t *conn, ev_session_t *s)
 	memcpy(req->ContractSignatureCertChain.SubCertificates.Certificate.array[0].bytes, s->contract.sub_certs[0], s->contract.subcert_len[0]);
     req->ContractSignatureCertChain.SubCertificates.Certificate.array[0].bytesLen = s->contract.subcert_len[0];
     req->ContractSignatureCertChain.SubCertificates.Certificate.arrayLen = 1;
-    exiIn.V2G_Message.Body.PaymentDetailsReq.ContractSignatureCertChain.Id_isUsed = 0;
+    req->ContractSignatureCertChain.Id_isUsed = 0;
 	err = v2g_request(conn, &exiIn, &exiOut);
     if (err != 0) {
         printf("unable to do payment_details_request v2g_request, exiting\n");
@@ -432,14 +434,16 @@ int authorization_request(evcc_conn_t *conn, ev_session_t *s)
     req->Id.characters[1] = 'D';
     req->Id.characters[2] = '1';
     req->Id.charactersLen = 3;
-	req->GenChallenge_isUsed = 1;
-    memcpy(req->GenChallenge.bytes, s->challenge, 16);
-	req->GenChallenge.bytesLen = 16;
+    if (!s->charging_is_free) {
+	    req->GenChallenge_isUsed = 1;
+        memcpy(req->GenChallenge.bytes, s->challenge, 16);
+	    req->GenChallenge.bytesLen = 16;
 
-	exiIn.V2G_Message.Header.Signature_isUsed = 1u;
-	sign_auth_request(req, &s->contract.key,
-	                   &s->contract.ctr_drbg,
-	                   &exiIn.V2G_Message.Header.Signature);
+	    exiIn.V2G_Message.Header.Signature_isUsed = 1u;
+	    sign_auth_request(req, &s->contract.key,
+	                       &s->contract.ctr_drbg,
+	                       &exiIn.V2G_Message.Header.Signature);
+	}
 
 	err = v2g_request(conn, &exiIn, &exiOut);
     if (err != 0) {

@@ -1,10 +1,10 @@
 #ifndef EXAMPLE_CLIENT_H
 #define EXAMPLE_CLIENT_H
-
 typedef struct ev_session ev_session_t;
 struct ev_session{
     uint64_t id;
     uint16_t charge_service_id;
+    bool charging_is_free;
     uint8_t challenge[16];
     struct{
         bool is_used;
@@ -20,6 +20,11 @@ struct ev_session{
         ctr_drbg_context ctr_drbg;
     } contract;
 };
+void init_v2g_request(struct v2gEXIDocument *exiIn, ev_session_t *s);
+void SetProfileEntry(struct v2gChargingProfileType* prof,
+                     uint32_t start, int32_t value,
+                     uint32_t nphases);
+int verify_response_code(v2gresponseCodeType code);
 void evcc_session_cleanup(ev_session_t* s);
 int load_contract(const char *pemchain_path, const char *keyfile_path, ev_session_t *s);
 int sign_auth_request(struct v2gAuthorizationReqType *req,

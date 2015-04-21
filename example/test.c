@@ -74,10 +74,12 @@ static void ev(const char *if_name, bool tls_enabled)
         return;
     }
     printf("payment details request\n");
-    err = payment_details_request(&conn, &s);
-    if (err != 0) {
-        printf("ev_example: payment_selection_request err\n");
-        return;
+    if (!s.charging_is_free) {
+        err = payment_details_request(&conn, &s);
+        if (err != 0) {
+            printf("ev_example: payment_selection_request err\n");
+            return;
+        }
     }
     printf("authorization request\n");
     err = authorization_request(&conn, &s);
@@ -168,17 +170,20 @@ threadmain(int argc,
     int opt, slac = 0, notls = 0;
 
     argv0 = argv[0];
-    while ((opt = getopt(argc, argv, "svn")) != -1) {
+    while ((opt = getopt(argc, argv, "svnf")) != -1) {
         switch (opt) {
-        case 's':
+        case 's': // Enable SLAC
            slac++;
            break;
 
-        case 'v':
+        case 'v': // Verbose
             chattyv2g++;
             break;
         case 'n': // no tls
             notls++;
+            break;
+        case 'f':
+            secc_free_charge++;
             break;
         default:
             usage();

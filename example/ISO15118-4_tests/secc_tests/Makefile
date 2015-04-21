@@ -7,7 +7,7 @@ TARGET=secc_test
 
 SOURCES=\
 	secc_test.c\
-	../client.c\
+	../../client.c\
 
 HEADERS=\
 
