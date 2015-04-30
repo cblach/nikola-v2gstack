@@ -47,7 +47,7 @@ static inline uvlong nsleep(uvlong ns)
     return (r == 0) ? 0 : ((uvlong)left.tv_sec * TIME_SECOND + (uvlong)ts.tv_nsec);
 }
 
-static void print_byte_arr(byte *arr, size_t n)
+/*static void print_byte_arr(byte *arr, size_t n)
 {
     int i;
     if (chattyv2g) fprintf(stderr, "[");
@@ -56,7 +56,7 @@ static void print_byte_arr(byte *arr, size_t n)
         if (chattyv2g) fprintf(stderr, " %02x", arr[i]);
     }
     if (chattyv2g) fprintf(stderr, " ]\n");
-}
+}*/
 
 static void write_header(byte *buf,
                          uint16_t payload_type,
@@ -318,7 +318,6 @@ void evse_sdp_respond(const char *if_name, struct sockaddr_in6 raddr,
     payload[18] = secc_security; // Signal 0x01 for TCP only or 0x00 for TLS
     payload[19] = 0; // Set underlying protocol to TCP (no choice)
     // === Send sdp response packet ===
-    print_byte_arr(raddr.sin6_addr.s6_addr, sizeof(struct sockaddr_in6));
     if (chattyv2g) fprintf(stderr, "======SEND\n");
     sentSz = sendto(sock, buf,
                     SDP_HEADER_LEN+SDP_RESP_PAYLOAD_LEN, 0,

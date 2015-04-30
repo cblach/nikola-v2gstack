@@ -6,6 +6,8 @@
 #include <nikolav2g.h>
 #include <polarssl/x509.h>
 #include <polarssl/error.h>
+#include <time.h>
+#include <OpenV2G/v2gEXIDatatypes.h>
 #include "slac/plc_eth.h"
 #include "client.h"
 #include "server.h"
@@ -19,6 +21,9 @@ static const uint8_t EVSEMAC[6] = {0x00, 0x05, 0xB6, 0x01, 0x88, 0xA3};
 
 static const char *argv0;
 
+static int enable_timestamps;
+
+
 static void fatal(const char *fmt, ...)
 {
     va_list ap;
@@ -30,6 +35,26 @@ static void fatal(const char *fmt, ...)
     fprintf(stderr, "\n");
 
     exit(1);
+}
+
+struct timespec tstart = {0,0};
+struct timespec tnow = {0,0};
+static void init_timestamps() {
+    enable_timestamps++;
+    clock_gettime(CLOCK_MONOTONIC, &tstart);
+}
+
+static void timestamp_print()
+{
+    struct timespec temp;
+    if (enable_timestamps) {
+        //double datetime_diff_ms = difftime(time(0), start_time);
+        //printf("%f\n", datetime_diff_ms);
+        clock_gettime(CLOCK_MONOTONIC, &tnow);
+        temp.tv_sec = tnow.tv_sec-tstart.tv_sec;
+		temp.tv_nsec = tnow.tv_nsec-tstart.tv_nsec;
+        printf("%luus\n", temp.tv_sec * 1000000 + temp.tv_nsec /1000);
+    }
 }
 
 static void ev(const char *if_name, bool tls_enabled)
@@ -55,24 +80,28 @@ static void ev(const char *if_name, bool tls_enabled)
         printf("main: evcc_connect_tls error\n");
         return;
     }
+    timestamp_print();
     printf("session setup request\n");
     err = session_request(&conn, &s);
     if (err != 0) {
         printf("RIP session_request\n");
         return;
     }
+    timestamp_print();
     printf("service discovery request\n");
     err = service_discovery_request(&conn, &s);
     if (err != 0) {
         printf("ev_example: service discovery request err\n");
         return;
     }
+    timestamp_print();
     printf("payment selection request\n");
     err = payment_selection_request(&conn, &s);
     if (err != 0) {
         printf("ev_example: payment_selection_request err\n");
         return;
     }
+    timestamp_print();
     printf("payment details request\n");
     if (!s.charging_is_free) {
         err = payment_details_request(&conn, &s);
@@ -81,26 +110,30 @@ static void ev(const char *if_name, bool tls_enabled)
             return;
         }
     }
+    timestamp_print();
     printf("authorization request\n");
     err = authorization_request(&conn, &s);
     if (err != 0) {
         printf("ev_example: authorization_request err\n");
         return;
     }
+    timestamp_print();
     printf("charge parameter request\n");
     err = charge_parameter_request(&conn, &s);
     if (err != 0) {
         printf("ev_example: charge_parameter_request err\n");
         return;
     }
+    timestamp_print();
     printf("power delivery request\n");
-    err = power_delivery_request(&conn, &s);
+    err = power_delivery_request(&conn, &s, v2gchargeProgressType_Start);
     if (err != 0) {
-        printf("ev_example: power_delivery_request err\n");
+        printf("ev_example: power_delivery start request err\n");
         return;
     }
     printf("Charging (repeating charging status requests)\n");
     for (int i = 0;i < 2; i++) {
+        timestamp_print();
         err = charging_status_request(&conn, &s);
         if (err != 0) {
             printf("ev_example: charging_status_request err\n");
@@ -110,12 +143,20 @@ static void ev(const char *if_name, bool tls_enabled)
         fflush(stdout);
         sleep(1);
     }
+    printf("Performing power delivery stop request\n");
+    err = power_delivery_request(&conn, &s, v2gchargeProgressType_Stop);
+    if (err != 0) {
+        printf("ev_example: power_delivery_request err\n");
+        return;
+    }
+    timestamp_print();
     printf("Performing session stop request\n");
     err = session_stop_request(&conn, &s);
     if (err != 0) {
         printf("ev_example: session_stop_request err\n");
         return;
     }
+    timestamp_print();
     evcc_close_conn(&conn);
     evcc_session_cleanup(&s);
     printf("Finished charging, ending session\n");
@@ -170,7 +211,7 @@ threadmain(int argc,
     int opt, slac = 0, notls = 0;
 
     argv0 = argv[0];
-    while ((opt = getopt(argc, argv, "svnf")) != -1) {
+    while ((opt = getopt(argc, argv, "svnft")) != -1) {
         switch (opt) {
         case 's': // Enable SLAC
            slac++;
@@ -184,6 +225,9 @@ threadmain(int argc,
             break;
         case 'f':
             secc_free_charge++;
+            break;
+        case 't':
+            init_timestamps();
             break;
         default:
             usage();

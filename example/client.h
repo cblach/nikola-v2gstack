@@ -36,7 +36,8 @@ int service_discovery_request(evcc_conn_t *conn, ev_session_t *s);
 int payment_selection_request(evcc_conn_t *conn, ev_session_t *s);
 int payment_details_request(evcc_conn_t *conn, ev_session_t *s);
 int authorization_request(evcc_conn_t *conn, ev_session_t *s);
-int charge_parameter_request(evcc_conn_t *conn, ev_session_t *s);int power_delivery_request(evcc_conn_t *conn, ev_session_t *s);
+int charge_parameter_request(evcc_conn_t *conn, ev_session_t *s);
+int power_delivery_request(evcc_conn_t *conn, ev_session_t *s, v2gchargeProgressType progress);
 int charging_status_request(evcc_conn_t *conn, ev_session_t *s);
 int session_stop_request(evcc_conn_t *conn, ev_session_t *s);
 

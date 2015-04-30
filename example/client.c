@@ -539,7 +539,8 @@ int charge_parameter_request(evcc_conn_t *conn, ev_session_t *s)
     return 0;
 }
 
-int power_delivery_request(evcc_conn_t *conn, ev_session_t *s)
+int power_delivery_request(evcc_conn_t *conn, ev_session_t *s,
+                            v2gchargeProgressType progress)
 {
     int err;
     struct v2gEXIDocument exiIn;
@@ -551,21 +552,25 @@ int power_delivery_request(evcc_conn_t *conn, ev_session_t *s)
 	init_v2gPowerDeliveryReqType(&exiIn.V2G_Message.Body.PowerDeliveryReq);
 
 	exiIn.V2G_Message.Body.PowerDeliveryReq.DC_EVPowerDeliveryParameter_isUsed = 0;
-	exiIn.V2G_Message.Body.PowerDeliveryReq.ChargeProgress = v2gchargeProgressType_Start;
+	exiIn.V2G_Message.Body.PowerDeliveryReq.ChargeProgress = progress;
 
 	// === A charging profile is used for this request===
-	exiIn.V2G_Message.Body.PowerDeliveryReq.ChargingProfile_isUsed = 1u;
+
 	exiIn.V2G_Message.Body.PowerDeliveryReq.SAScheduleTupleID  = s->pmax_schedule.tupleid;
 
-
-	 // Must be initialized to 0
-	// == Charging Entries ==
-	//SetProfileEntry(profile, relative time, power, max phases)
-    profile->ProfileEntry.arrayLen = 0; // must be 0
-    SetProfileEntry(profile,   0, 15000, 3);
-    SetProfileEntry(profile, 100, 20000, 3);
-    SetProfileEntry(profile, 200, 10000, 3);
-    SetProfileEntry(profile, 400,     0, 3);
+    if (progress == v2gchargeProgressType_Start) {
+	    exiIn.V2G_Message.Body.PowerDeliveryReq.ChargingProfile_isUsed = 1u;
+	     // Must be initialized to 0
+	    // == Charging Entries ==
+	    //SetProfileEntry(profile, relative time, power, max phases)
+        profile->ProfileEntry.arrayLen = 0; // must be 0
+        SetProfileEntry(profile,   0, 15000, 3);
+        SetProfileEntry(profile, 100, 20000, 3);
+        SetProfileEntry(profile, 200, 10000, 3);
+        SetProfileEntry(profile, 400,     0, 3);
+	} else {
+	    exiIn.V2G_Message.Body.PowerDeliveryReq.ChargingProfile_isUsed = 0;
+	}
 	err = v2g_request(conn, &exiIn, &exiOut);
     if (err != 0) {
         printf("power_delivery_request v2g_request error, exiting\n");

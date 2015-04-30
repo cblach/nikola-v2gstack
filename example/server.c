@@ -12,27 +12,6 @@
 #include "server.h"
 int secc_free_charge = 0;
 
-typedef struct session_data session_data_t;
-struct session_data {
-    uint8_t evcc_id[6]; // EV mac address
-    struct v2gSelectedServiceType services[v2gSelectedServiceListType_SelectedService_ARRAY_SIZE];
-    v2gEnergyTransferModeType energy_transfer_mode;
-    v2gpaymentOptionType payment_type;
-    struct v2gSAScheduleListType SAScheduleList;
-    bool SAScheduleList_isUsed;
-    uint8_t challenge[16];
-    bool verified;
-    bool charging;
-    bool tls_enabled;
-    struct{
-        bool valid_crt; // Before a contract can be valid, it must have a valid crt
-        //byte cert[v2gCertificateChainType_Certificate_BYTES_SIZE];
-        //size_t cert_len;
-        x509_crt crt;
-        ecdsa_context pubkey;
-    } contract;
-};
-
 void session_data_cleanup(session_t *s) {
     session_data_t *sd = (session_data_t*)&s->data;
     // The mbed TLS functions inherently checks for NULL pointers
@@ -239,9 +218,9 @@ int verify_charging_profile(session_data_t *sd, uint8_t tupleid, struct v2gCharg
 //             Request Handling
 //=============================================
 
-static int handle_session_setup(struct v2gEXIDocument *exiIn,
-                                struct v2gEXIDocument *exiOut,
-                                session_t *s, session_data_t *sd)
+int handle_session_setup(struct v2gEXIDocument *exiIn,
+                         struct v2gEXIDocument *exiOut,
+                         session_t *s, session_data_t *sd)
 {
     struct v2gSessionSetupResType *res = &exiOut->V2G_Message.Body.SessionSetupRes;
 /* generate an unique sessionID */
@@ -258,9 +237,9 @@ static int handle_session_setup(struct v2gEXIDocument *exiIn,
     return 0;
 }
 
-static int handle_service_discovery(struct v2gEXIDocument *exiIn,
-                                    struct v2gEXIDocument *exiOut,
-                                    session_t *s, session_data_t *sd)
+int handle_service_discovery(struct v2gEXIDocument *exiIn,
+                             struct v2gEXIDocument *exiOut,
+                             session_t *s, session_data_t *sd)
 {
     struct v2gServiceDiscoveryResType *res = &exiOut->V2G_Message.Body.ServiceDiscoveryRes;
     // === Lookup session ===
@@ -306,9 +285,9 @@ static int handle_service_discovery(struct v2gEXIDocument *exiIn,
     return 0;
 }
 
-static int payment_service_selection(struct v2gEXIDocument *exiIn,
-                                     struct v2gEXIDocument *exiOut,
-                                     session_t *s, session_data_t *sd)
+int payment_service_selection(struct v2gEXIDocument *exiIn,
+                              struct v2gEXIDocument *exiOut,
+                              session_t *s, session_data_t *sd)
 {
     struct v2gPaymentServiceSelectionReqType *req = &exiIn->V2G_Message.Body.PaymentServiceSelectionReq;
     struct v2gPaymentServiceSelectionResType *res = &exiOut->V2G_Message.Body.PaymentServiceSelectionRes;
@@ -334,7 +313,25 @@ static int payment_service_selection(struct v2gEXIDocument *exiIn,
     return 0;
 }
 
-static int handle_payment_detail(struct v2gEXIDocument *exiIn,
+int handle_service_detail(struct v2gEXIDocument *exiIn,
+                          struct v2gEXIDocument *exiOut,
+                          session_t *s, session_data_t *sd)
+{
+    struct v2gServiceDetailReqType *req = &exiIn->V2G_Message.Body.ServiceDetailReq;
+    struct v2gServiceDetailResType *res = &exiOut->V2G_Message.Body.ServiceDetailRes;
+    res->ServiceID = req->ServiceID;
+    res->ServiceParameterList_isUsed = 0;
+    if (s == NULL) {
+        printf("create_response_message error: session_lookup_exi\n");
+	    memset(res, 0, sizeof(*res));
+        res->ResponseCode = v2gresponseCodeType_FAILED_UnknownSession;
+        return 0;
+    }
+    res->ResponseCode = v2gresponseCodeType_OK;
+    return 0;
+}
+
+int handle_payment_detail(struct v2gEXIDocument *exiIn,
                                  struct v2gEXIDocument *exiOut,
                                  session_t *s, session_data_t *sd)
 {
@@ -423,7 +420,7 @@ static int handle_payment_detail(struct v2gEXIDocument *exiIn,
     return 0;
 }
 
-static int handle_authorization(struct v2gEXIDocument *exiIn,
+int handle_authorization(struct v2gEXIDocument *exiIn,
                                 struct v2gEXIDocument *exiOut,
                                 session_t *s, session_data_t *sd)
 {
@@ -532,9 +529,9 @@ static int handle_authorization(struct v2gEXIDocument *exiIn,
 	return 0;
 }
 
-static int handle_charge_parameters(struct v2gEXIDocument *exiIn,
-                                    struct v2gEXIDocument *exiOut,
-                                    session_t *s, session_data_t *sd)
+int handle_charge_parameters(struct v2gEXIDocument *exiIn,
+                             struct v2gEXIDocument *exiOut,
+                             session_t *s, session_data_t *sd)
 {
     struct v2gChargeParameterDiscoveryReqType *req = &exiIn->V2G_Message.Body.ChargeParameterDiscoveryReq;
     struct v2gChargeParameterDiscoveryResType *res = &exiOut->V2G_Message.Body.ChargeParameterDiscoveryRes;
@@ -721,7 +718,7 @@ int handle_charging_status(struct v2gEXIDocument *exiIn,
 	return 0;
 }
 
-static int handle_session_stop(struct v2gEXIDocument *exiIn,
+int handle_session_stop(struct v2gEXIDocument *exiIn,
                                struct v2gEXIDocument *exiOut,
                                session_t *s, session_data_t *sd)
 {
@@ -776,8 +773,9 @@ int create_response_message(struct v2gEXIDocument *exiIn, struct v2gEXIDocument 
 	    init_v2gServiceDiscoveryResType(&exiOut->V2G_Message.Body.ServiceDiscoveryRes);
 		err = handle_service_discovery(exiIn, exiOut, s, sd);
 	} else if (exiIn->V2G_Message.Body.ServiceDetailReq_isUsed) {
-	    printf("No service detail request\n");
-	    err = -1;
+		exiOut->V2G_Message.Body.ServiceDetailRes_isUsed = 1u;
+	    init_v2gServiceDetailResType(&exiOut->V2G_Message.Body.ServiceDetailRes);
+	    err = handle_service_detail(exiIn, exiOut, s, sd);
 	} else if (exiIn->V2G_Message.Body.PaymentServiceSelectionReq_isUsed) {
 	    printf("Handling payment service selection request\n");
 	    exiOut->V2G_Message.Body.PaymentServiceSelectionRes_isUsed= 1u;

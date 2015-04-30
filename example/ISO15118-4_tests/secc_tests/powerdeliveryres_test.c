@@ -40,7 +40,7 @@ int test_power_delivery_request2(evcc_conn_t *conn, ev_session_t *s)
     BASE_POWER_DELIVERY
 	// === A charging profile is used for this request===
 	exiIn.V2G_Message.Body.PowerDeliveryReq.ChargingProfile_isUsed = 0;
-	exiIn.V2G_Message.Body.PowerDeliveryReq.ChargeProgress = v2gchargeProgressType_Stop;
+	exiIn.V2G_Message.Body.PowerDeliveryReq.ChargeProgress = v2gchargeProgressType_Renegotiate;
     POWER_DELIVERY_REQ
     VALIDATE_POWER_DELIVERY
     return 0;
@@ -51,7 +51,7 @@ int test_power_delivery_request3(evcc_conn_t *conn, ev_session_t *s)
     BASE_POWER_DELIVERY
 	// === A charging profile is used for this request===
 	exiIn.V2G_Message.Body.PowerDeliveryReq.ChargingProfile_isUsed = 0;
-	exiIn.V2G_Message.Body.PowerDeliveryReq.ChargeProgress = v2gchargeProgressType_Renegotiate;
+	exiIn.V2G_Message.Body.PowerDeliveryReq.ChargeProgress = v2gchargeProgressType_Stop;
     POWER_DELIVERY_REQ
     VALIDATE_POWER_DELIVERY
     return 0;
