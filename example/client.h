@@ -5,6 +5,7 @@ struct ev_session{
     uint64_t id;
     uint16_t charge_service_id;
     bool charging_is_free;
+    v2gEVSENotificationType evse_notification;
     uint8_t challenge[16];
     struct{
         bool is_used;

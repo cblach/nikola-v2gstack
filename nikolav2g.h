@@ -24,7 +24,8 @@ void sdp_listen(const char *if_name, int tls_port, int tcp_port);
 //    TLS
 //==============
 typedef int (*handle_func_t)(struct v2gEXIDocument*,
-                             struct v2gEXIDocument*);
+                             struct v2gEXIDocument*,
+                             bool tls_enabled);
 void secc_listen_tls(int, handle_func_t, const char *crt_path, const char *key_path);
 void secc_listen_tcp(int, handle_func_t);
 int bind_v2gport();

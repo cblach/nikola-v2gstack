@@ -159,6 +159,12 @@ static ssize_t request_writer(void *args, atomic_int *cancel) {
             return -1;
         }
         nsleep(SDP_TRY_DELAY * TIME_MILLISECOND);
+        printf("{\n");
+        int j;
+        for( j = 0; j < SDP_HEADER_LEN + SDP_REQ_PAYLOAD_LEN; j++) {
+            printf("%x ", buf[j]);
+        }
+        printf("}\n");
         i++;
     }
     if (i == SDP_MAX_TRIES) {
@@ -271,6 +277,7 @@ int ev_sdp_discover_evse(const char *if_name,
             break;
         case 1: // Done writing and no response -> error
             iocancel(iocr);
+            err = -1;
             break;
         default:
             if (chattyv2g) fprintf(stderr, "critical ev_sdp_discover_evse: alt error\n");

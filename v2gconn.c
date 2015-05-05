@@ -712,7 +712,7 @@ int secc_handle_request(comboconn_t *cconn, Chan *tc,
     }
     memset(&exi_out, 0, sizeof(exi_out));
     // === Call the user-defined handle function ===
-    err = handle_func(&exi_in, &exi_out);
+    err = handle_func(&exi_in, &exi_out, cconn->tls_enabled);
     if (err != 0) {
         if (chattyv2g) fprintf(stderr, "secc_handle_request: external handle_func returned error\n");
         return -1;

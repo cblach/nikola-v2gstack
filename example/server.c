@@ -539,6 +539,7 @@ int handle_charge_parameters(struct v2gEXIDocument *exiIn,
     struct v2gPMaxScheduleType *sched;
     bool valid_mode = false;
     // === Lookup session ===
+    sd->renegotiation_required = false;
 	res->EVSEProcessing = v2gEVSEProcessingType_Finished;
 	res->AC_EVSEChargeParameter_isUsed = 1u;
 	res->DC_EVSEChargeParameter_isUsed = 0u;
@@ -628,7 +629,7 @@ int handle_power_delivery(struct v2gEXIDocument *exiIn,
     struct v2gPowerDeliveryResType *res = &exiOut->V2G_Message.Body.PowerDeliveryRes;
     int err;
 	res->AC_EVSEStatus.RCD=0;
-	res->AC_EVSEStatus.EVSENotification=3;
+	res->AC_EVSEStatus.EVSENotification=0;
 	res->AC_EVSEStatus.NotificationMaxDelay=12;
 	res->AC_EVSEStatus_isUsed = 1;
 	res->DC_EVSEStatus_isUsed = 0;
@@ -650,6 +651,11 @@ int handle_power_delivery(struct v2gEXIDocument *exiIn,
     // === Act based on which charge progress is selected ===
     switch (req->ChargeProgress) {
     case v2gchargeProgressType_Start:
+        if (sd->renegotiation_required){
+            printf("handle_charging_status: renegotiation required\n");
+            res->ResponseCode = v2gresponseCodeType_FAILED_SequenceError;
+            return 0;
+        }
         if (req->ChargingProfile_isUsed) {
             err = verify_charging_profile(sd, req->SAScheduleTupleID, &req->ChargingProfile);
             if (err != 0) {
@@ -664,6 +670,7 @@ int handle_power_delivery(struct v2gEXIDocument *exiIn,
         sd->charging = false;
         break;
     case v2gchargeProgressType_Renegotiate:
+        sd->renegotiation_required = true;
         break;
     default:
         return -1;
@@ -685,6 +692,11 @@ int handle_charging_status(struct v2gEXIDocument *exiIn,
         res->ResponseCode = v2gresponseCodeType_FAILED_UnknownSession;
         return 0;
     }
+    if (sd->renegotiation_required){
+        printf("handle_charging_status: renegotiation required\n");
+        res->ResponseCode = v2gresponseCodeType_FAILED_SequenceError;
+        return 0;
+    }
     if (!sd->verified) {
         printf("handle_charging_status: session not verified\n");
         res->ResponseCode = v2gresponseCodeType_FAILED_SequenceError;
@@ -693,9 +705,9 @@ int handle_charging_status(struct v2gEXIDocument *exiIn,
 	res->ResponseCode = v2gresponseCodeType_OK;
 	res->EVSEID.characters[0]=12;
 	res->EVSEID.charactersLen =1;
-	res->AC_EVSEStatus.RCD=1;
+	res->AC_EVSEStatus.RCD = 0;
 	res->AC_EVSEStatus.EVSENotification = v2gEVSENotificationType_None;
-	res->AC_EVSEStatus.NotificationMaxDelay=123;
+	res->AC_EVSEStatus.NotificationMaxDelay=1;
 	res->ReceiptRequired=1;
 	res->ReceiptRequired_isUsed =1;
 	res->EVSEMaxCurrent.Multiplier = 0;
@@ -738,7 +750,9 @@ int handle_session_stop(struct v2gEXIDocument *exiIn,
 	return 0;
 }
 
-int create_response_message(struct v2gEXIDocument *exiIn, struct v2gEXIDocument *exiOut) {
+int create_response_message(struct v2gEXIDocument *exiIn,
+                            struct v2gEXIDocument *exiOut,
+                            bool tls_enabled) {
 	int err = -1;//ERROR_UNEXPECTED_REQUEST_MESSAGE;
     session_t *s;
     session_data_t *sd;
@@ -748,11 +762,17 @@ int create_response_message(struct v2gEXIDocument *exiIn, struct v2gEXIDocument 
 	    return -1;
 	}
     // === Fetch the session ===
+    s = session_lookup_exi(exiIn);
+    // The following allows session resumption, which is done using a session setup
+    // request with a session id
     if (exiIn->V2G_Message.Body.SessionSetupReq_isUsed) {
-	    s = session_new(sizeof(session_data_t), &session_data_cleanup);
-	    printf("New Session id = %lu", s->id);
-    } else {
-        s = session_lookup_exi(exiIn);
+        if (s == NULL) {
+    	    s = session_new(sizeof(session_data_t), &session_data_cleanup);
+    	    printf("New Session id = %lu\n", s->id);
+    	    printf("TLSENABLED = %d\n", tls_enabled);
+        } else {
+            printf("Session with id = %lu has been resumed\n", s->id);
+        }
     }
     // Note that the session can be NULL, thus this must be
     // check in the individual response functions

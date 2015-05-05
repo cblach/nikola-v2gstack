@@ -202,13 +202,13 @@ void SetProfileEntry(struct v2gChargingProfileType* prof,
 }
 
 
-static void printACEVSEStatus(struct v2gAC_EVSEStatusType *status)
+/*static void printACEVSEStatus(struct v2gAC_EVSEStatusType *status)
 {
 	printf("\tEVSEStatus:\n");
 	printf("\t\tRCD=%d\n", status->RCD);
 	printf("\t\tEVSENotification=%d\n", status->EVSENotification);
 	printf("\t\tNotificationMaxDelay=%d\n", status->NotificationMaxDelay);
-}
+}*/
 
 int verify_response_code(v2gresponseCodeType code)
 {
@@ -532,10 +532,10 @@ int charge_parameter_request(evcc_conn_t *conn, ev_session_t *s)
         s->pmax_schedule.tupleid = res->SAScheduleList.SAScheduleTuple.array[0].SAScheduleTupleID;
     }
     // === Print digest ===
-	printACEVSEStatus(&(res->AC_EVSEChargeParameter.AC_EVSEStatus));
+	/*printACEVSEStatus(&(res->AC_EVSEChargeParameter.AC_EVSEStatus));
 	printf("\t EVSEProcessing=%d\n", res->EVSEProcessing);
 	printf("\t EVSEMaxCurrent=%d\n", res->AC_EVSEChargeParameter.EVSEMaxCurrent.Value);
-	printf("\t EVSENominalVoltage=%d\n", res->AC_EVSEChargeParameter.EVSENominalVoltage.Value);
+	printf("\t EVSENominalVoltage=%d\n", res->AC_EVSEChargeParameter.EVSENominalVoltage.Value);*/
     return 0;
 }
 
@@ -586,7 +586,7 @@ int power_delivery_request(evcc_conn_t *conn, ev_session_t *s,
         printf("power_delivery_request: response NOT ok, code = %d\n", exiOut.V2G_Message.Body.PowerDeliveryRes.ResponseCode);
         return -1;
     }
-	printACEVSEStatus(&(exiOut.V2G_Message.Body.PowerDeliveryRes.AC_EVSEStatus));
+	//printACEVSEStatus(&(exiOut.V2G_Message.Body.PowerDeliveryRes.AC_EVSEStatus));
     return 0;
 }
 
@@ -595,6 +595,7 @@ int charging_status_request(evcc_conn_t *conn, ev_session_t *s)
     int err;
     struct v2gEXIDocument exiIn;
     struct v2gEXIDocument exiOut;
+    struct v2gChargingStatusResType *res = &exiOut.V2G_Message.Body.ChargingStatusRes;
     init_v2g_request(&exiIn, s);
 	exiIn.V2G_Message.Body.ChargingStatusReq_isUsed = 1u;
 	init_v2gChargingStatusReqType(&exiIn.V2G_Message.Body.ChargingStatusReq);
@@ -609,9 +610,12 @@ int charging_status_request(evcc_conn_t *conn, ev_session_t *s)
         return -1;
     }
     // === Validate response code ===
-    if (verify_response_code(exiOut.V2G_Message.Body.ChargingStatusRes.ResponseCode) != 0) {
+    if (verify_response_code(res->ResponseCode) != 0) {
         printf("charging_status_request: authorization response NOT ok, code = %d\n", exiOut.V2G_Message.Body.ChargingStatusRes.ResponseCode);
         return -1;
+    }
+    if (res->AC_EVSEStatus.EVSENotification <= v2gEVSENotificationType_ReNegotiation) {
+        s->evse_notification = res->AC_EVSEStatus.EVSENotification;
     }
     return 0;
 }

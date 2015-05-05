@@ -56,6 +56,16 @@ int slac_verify_response(void *buf, uint8_t mmv, uint16_t mmtype)
     return 0;
 }
 
+static uint8_t GetValidValue(uint8_t val, uint8_t min, uint8_t max) {
+    if (val < min) {
+        return min;
+    }
+    if (val > max) {
+        return max;
+    }
+    return val;
+}
+
 typedef struct iosendloop_args iosendloop_args_t;
 struct iosendloop_args{
     ethconn_t *ethconn;
@@ -239,7 +249,7 @@ int slac_cm_param_req(ethconn_t *ethconn, struct slac_session *session)
     }
     //memcpy(session->EVSE_MAC, confirm->ethernet.OSA, ETH_ALEN);
     memcpy(session->FORWARDING_STA, confirm->FORWARDING_STA, sizeof (session->FORWARDING_STA));
-    session->NUM_SOUNDS = confirm->NUM_SOUNDS;
+    session->NUM_SOUNDS = GetValidValue(confirm->NUM_SOUNDS, 8, 16);
     session->TIME_OUT = confirm->TIME_OUT;
     session->RESP_TYPE = confirm->RESP_TYPE;
     printf("Received leh something\n");

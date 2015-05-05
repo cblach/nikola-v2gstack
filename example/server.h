@@ -16,6 +16,7 @@ struct session_data {
     bool verified;
     bool charging;
     bool tls_enabled;
+    bool renegotiation_required;
     struct{
         bool valid_crt; // Before a contract can be valid, it must have a valid crt
         //byte cert[v2gCertificateChainType_Certificate_BYTES_SIZE];
@@ -30,7 +31,7 @@ int verify_charging_profile(session_data_t *sd, uint8_t tupleid, struct v2gCharg
 
 extern x509_crt Trusted_contract_rootcert_chain;
 
-int create_response_message(struct v2gEXIDocument *exiIn, struct v2gEXIDocument *exiOut);
+int create_response_message(struct v2gEXIDocument *exiIn, struct v2gEXIDocument *exiOut, bool tls_enabled);
 
 
 int handle_session_setup(struct v2gEXIDocument *exiIn,

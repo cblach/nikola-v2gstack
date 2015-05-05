@@ -64,6 +64,7 @@ static void ev(const char *if_name, bool tls_enabled)
     memset(&conn, 0, sizeof(evcc_conn_t));
     memset(&s, 0, sizeof(s));
     int err;
+    int ncycles = 0;
     if (load_contract("certs/contractchain.pem", "certs/contract.key", &s) != 0) {
         fatal("can't load certs/contract.key: %m");
     }
@@ -119,6 +120,7 @@ static void ev(const char *if_name, bool tls_enabled)
     }
     timestamp_print();
     printf("charge parameter request\n");
+    charging_negotiation:
     err = charge_parameter_request(&conn, &s);
     if (err != 0) {
         printf("ev_example: charge_parameter_request err\n");
@@ -132,12 +134,18 @@ static void ev(const char *if_name, bool tls_enabled)
         return;
     }
     printf("Charging (repeating charging status requests)\n");
-    for (int i = 0;i < 2; i++) {
+    for (;ncycles < 5; ncycles++) {
         timestamp_print();
         err = charging_status_request(&conn, &s);
         if (err != 0) {
             printf("ev_example: charging_status_request err\n");
             return;
+        }
+        if (s.evse_notification == v2gEVSENotificationType_StopCharging) {
+            printf("ev_example: EVSE has prompted charging to stop\n");
+            break;
+        } else if (s.evse_notification == v2gEVSENotificationType_ReNegotiation) {
+            goto charging_negotiation;
         }
         printf("=");
         fflush(stdout);
