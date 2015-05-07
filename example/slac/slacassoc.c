@@ -4,9 +4,11 @@
 #include <multitask.h>
 #include <limits.h>
 #include "homeplug.h"
-#include "slac.h"
+#include "qualcomm_slac.h"
 #include "plc_eth.h"
+#include "../timeprofiling.h"
 
+int chattyslac = 0;
 typedef uint8_t byte;
 /*#define HOMEPLUG_MMV 0x01
 #define HOMEPLUG_MMTYPE 0x0000*/
@@ -42,15 +44,15 @@ int slac_verify_response(void *buf, uint8_t mmv, uint16_t mmtype)
 {
     struct homeplug *homeplug = (struct homeplug *)(buf);
     if (ntohs (homeplug->ethernet.MTYPE) != ETH_P_HPAV) {
-        printf("wrong eth type\n");
+        if (chattyslac) fprintf(stderr, "wrong eth type\n");
         return -1;
     }
     if (homeplug->homeplug.MMV != mmv) {
-        printf("wrong mmv type %u\n", mmv);
+        if (chattyslac) fprintf(stderr, "wrong mmv type %u\n", mmv);
         return -1;
     }
     if (le16toh(homeplug->homeplug.MMTYPE) != mmtype) {
-        printf("wrong mmtype 0x%x, expected 0x%x\n", homeplug->homeplug.MMTYPE, mmtype);
+        if (chattyslac) fprintf(stderr, "wrong mmtype 0x%x, expected 0x%x\n", homeplug->homeplug.MMTYPE, mmtype);
         return -1;
     }
     return 0;
@@ -138,22 +140,22 @@ ssize_t slac_recv_c(ethconn_t *ethconn, void *ethframe, byte mmv, uint16_t mmtyp
                                   .mmv = mmv,
                                   .mmtype = mmtype};
     if (iocr == NULL) {
-        printf("slac_recv_c: iochan err\n");
+        if (chattyslac) fprintf(stderr, "slac_recv_c: iochan err\n");
         return -1;
     }
     iocall(iocr, &slac_iorecvloop, &rargs, sizeof(rargs));
     switch (alt(alts)) {
         case 0: // Done reading response
-            printf("received valid response\n");
+            if (chattyslac) fprintf(stderr, "received valid response\n");
             err = ret;
             break;
         case 1: // Done writing and no response -> error
             iocancel(iocr);
             err = -1;
-            printf("timeout\n");
+            if (chattyslac) fprintf(stderr, "timeout\n");
             break;
         default:
-            printf("critical ev_sdp_discover_evse: alt error\n");
+            if (chattyslac) fprintf(stderr, "critical ev_sdp_discover_evse: alt error\n");
             abort();
     }
     chanfree(iocr);
@@ -186,7 +188,7 @@ ssize_t slac_sendrecvloop(ethconn_t *ethconn, void *ethframe, size_t framelen,
                                   .senddelay_ns = senddelay_ns,
                                   .max_tries = max_send_tries};
 	if (iocr == NULL || iocs == NULL) {
-	    printf("slac_sendrecvloop: iochan error\n");
+	    if (chattyslac) fprintf(stderr, "slac_sendrecvloop: iochan error\n");
 	    if (iocr != NULL) {
 	        chanfree(iocr);
 	    }
@@ -200,7 +202,7 @@ ssize_t slac_sendrecvloop(ethconn_t *ethconn, void *ethframe, size_t framelen,
     switch (alt(alts)) {
         case 0: // Done reading response
             iocancel(iocs);
-            printf("received valid response\n");
+            if (chattyslac) fprintf(stderr, "received valid response\n");
             err = ret;
             break;
         case 1: // Done writing and no response -> error
@@ -208,7 +210,7 @@ ssize_t slac_sendrecvloop(ethconn_t *ethconn, void *ethframe, size_t framelen,
             err = -1;
             break;
         default:
-            printf("critical ev_sdp_discover_evse: alt error\n");
+            if (chattyslac) fprintf(stderr, "critical ev_sdp_discover_evse: alt error\n");
             abort();
     }
     chanfree(iocr);
@@ -236,15 +238,15 @@ int slac_cm_param_req(ethconn_t *ethconn, struct slac_session *session)
                           HOMEPLUG_MMV, (CM_SLAC_PARAM | MMTYPE_CNF),
                           0, 250  *TIME_MILLISECOND);
     if (n <= 0) {
-        printf("slac_cm_param_req error\n");
+        if (chattyslac) fprintf(stderr, "slac_cm_param_req error\n");
         return -1;
     }
     if (confirm->APPLICATION_TYPE != SLAC_APPLICATION_TYPE) {
-        printf("slac_cm_param_req: invalid slac application type\n");
+        if (chattyslac) fprintf(stderr, "slac_cm_param_req: invalid slac application type\n");
         return -1;
     }
     if (confirm->SECURITY_TYPE != SLAC_SECURITY_TYPE) {
-        printf("slac_cm_param_req: invalid slac security type\n");
+        if (chattyslac) fprintf(stderr, "slac_cm_param_req: invalid slac security type\n");
         return -1;
     }
     //memcpy(session->EVSE_MAC, confirm->ethernet.OSA, ETH_ALEN);
@@ -252,7 +254,6 @@ int slac_cm_param_req(ethconn_t *ethconn, struct slac_session *session)
     session->NUM_SOUNDS = GetValidValue(confirm->NUM_SOUNDS, 8, 16);
     session->TIME_OUT = confirm->TIME_OUT;
     session->RESP_TYPE = confirm->RESP_TYPE;
-    printf("Received leh something\n");
     return 0;
 }
 
@@ -274,7 +275,7 @@ int slac_cm_start_atten_char(ethconn_t *ethconn, struct slac_session *session)
 	for (i = 0; i < 3; i++) {
 	    err = ethsend(ethconn, ethframe, sizeof(*indicate));
         if (err != 0) {
-            printf("slac_cm_start_atten_char: ethsend err\n");
+            if (chattyslac) fprintf(stderr, "slac_cm_start_atten_char: ethsend err\n");
             return -1;
         }
     }
@@ -299,7 +300,7 @@ int slac_cm_mnbc_sound(ethconn_t *ethconn, struct slac_session * session)
 		err = ethsend(ethconn, ethframe, sizeof(*indicate));
 		//err = 1;
         if (err != 0) {
-            printf("ethsend err\n");
+            if (chattyslac) fprintf(stderr, "ethsend err\n");
             return -1;
         }
         nsleep(MSOUND_PAUSE);
@@ -312,7 +313,7 @@ int slac_check_attn(byte AAG[SLAC_GROUPS], byte numgroups, unsigned limit)
     unsigned int avg, i;
 	unsigned int total = 0;
 	if (numgroups == 0) {
-	    printf("slac_check_attn: no atten groups\n");
+	    if (chattyslac) fprintf(stderr, "slac_check_attn: no atten groups\n");
 	    return -1;
 	}
 	for (i = 0; i < numgroups; i++) {
@@ -320,10 +321,10 @@ int slac_check_attn(byte AAG[SLAC_GROUPS], byte numgroups, unsigned limit)
 	}
 	avg = total / i;
 	if (avg > limit) {
-	    printf("slac_check_attn: Average attenuation %udB high\n", avg);
+	    if (chattyslac) fprintf(stderr, "slac_check_attn: Average attenuation %udB high\n", avg);
         return -1;
 	}
-	printf("Success: Average attenuation %udB, is less than %udB\n", avg, SLAC_ATTENUATION_THRESHOLD);
+	if (chattyslac) fprintf(stderr, "Success: Average attenuation %udB, is less than %udB\n", avg, SLAC_ATTENUATION_THRESHOLD);
 	return 0;
 }
 
@@ -344,13 +345,13 @@ int slac_cm_atten_char(ethconn_t *ethconn, struct slac_session *session)
     for (;;) {
         n = slac_recv_c(ethconn, ethframe, HOMEPLUG_MMV, (CM_ATTEN_CHAR | MMTYPE_IND), &tc);
         if (n <= 0) {
-            printf("slac_cm_atten_char: slac_recv_c err\n");
+            if (chattyslac) fprintf(stderr, "slac_cm_atten_char: slac_recv_c err\n");
             chanfree(&tc);
             return -1;
         }
         err = slac_check_attn(indicate->ACVarField.ATTEN_PROFILE.AAG, indicate->ACVarField.ATTEN_PROFILE.NumGroups,session->limit);
         if (err != 0) {
-            printf("slac_associate: slac_check_attn error\n");
+            if (chattyslac) fprintf(stderr, "slac_associate: slac_check_attn error\n");
             continue;
         }
         break;
@@ -372,11 +373,10 @@ int slac_cm_atten_char(ethconn_t *ethconn, struct slac_session *session)
 	response->ACVarField.Result = 0;
     err = ethsend(ethconn, ethframe, sizeof(*response));
     if (err != 0) {
-        printf("slac_cm_atten_char: ethsend err\n");
+        if (chattyslac) fprintf(stderr, "slac_cm_atten_char: ethsend err\n");
         chanfree(&tc);
         return -1;
     }
-	printf("happeh tihmes\n");
 	chanfree(&tc);
 	return 0;
 }
@@ -402,25 +402,25 @@ int slac_cm_match_request(ethconn_t *ethconn, struct slac_session *session)
 	memset(request->MatchVarField.RSVD, 0, sizeof(request->MatchVarField.RSVD));
     err = ethsend(ethconn, ethframe, sizeof(*request));
     if (err != 0) {
-        printf("slac_cm_match_request: ethsend error\n");
+        if (chattyslac) fprintf(stderr, "slac_cm_match_request: ethsend error\n");
         return -1;
     }
     err = tchaninit(&tc);
     if (err != 0) {
-        printf("tchaninit err\n");
+        if (chattyslac) fprintf(stderr, "tchaninit err\n");
         return -1;
     }
     tchanset(&tc, SLAC_T_ASSOC_RESPONSE);
     for(;;) {
         n = slac_recv_c(ethconn, ethframe, HOMEPLUG_MMV, (CM_SLAC_MATCH | MMTYPE_CNF), &tc);
         if (n <= 0) {
-            printf("slac_cm_match_request: slac_recv err\n");
+            if (chattyslac) fprintf(stderr, "slac_cm_match_request: slac_recv err\n");
             chanfree(&tc);
             return -1;
         }
         if (memcmp (session->RunID, confirm->MatchVarField.RunID,
                     sizeof (session->RunID)) != 0) {
-            printf("slac_cm_match_request: invalid runid error, repeating recv\n");
+            if (chattyslac) fprintf(stderr, "slac_cm_match_request: invalid runid error, repeating recv\n");
             continue;
         }
         break;
@@ -458,24 +458,24 @@ int slac_cm_set_key(ethconn_t *ethconn, struct slac_session *session)
 	memset(request->RSVD, 0, sizeof(request->RSVD));
 	err = ethsend(ethconn, ethframe, sizeof(*request));
     if (err != 0) {
-        printf("slac_cm_set_key_request: ethsend error\n");
+        if (chattyslac) fprintf(stderr, "slac_cm_set_key_request: ethsend error\n");
         return -1;
     }
     err = tchaninit(&tc);
     if (err != 0) {
-        printf("tchaninit err\n");
+        if (chattyslac) fprintf(stderr, "tchaninit err\n");
         return -1;
     }
     tchanset(&tc, SLAC_T_ASSOC_RESPONSE);
-    printf("====####========== SET KEY ======####======\n");
+    if (chattyslac) fprintf(stderr, "====####========== SET KEY ======####======\n");
     n = slac_recv_c(ethconn, ethframe, HOMEPLUG_MMV, (CM_SET_KEY | MMTYPE_CNF), &tc);
     if (n <= 0) {
-        printf("slac_cm_set_key_request: slac_recv_c err\n");
+        if (chattyslac) fprintf(stderr, "slac_cm_set_key_request: slac_recv_c err\n");
         chanfree(&tc);
         return -1;
     }
     if (confirm->RESULT == 0) {
-        printf("slac_cm_set_key_request: error result\n");
+        if (chattyslac) fprintf(stderr, "slac_cm_set_key_request: error result\n");
         chanfree(&tc);
         return -1;
     }
@@ -490,10 +490,11 @@ int slac_associate(const char *if_name)
     byte pev_id[17] = {0x11,0x22,0x33,0x44,0x55,0x66,0x77,0x88,0x99,0x00,
                        0x11,0x22,0x33,0x44,0x55,0x66,0x77};
     int err;
+    tlog tl;
     static uint8_t runid_counter = 0;
     err = ethdial(&ethconn, if_name, ETH_P_HPAV);
     if (err != 0) {
-        printf("ethdial err %m\n");
+        if (chattyslac) fprintf(stderr, "ethdial err %m\n");
         return -1;
     }
     memset(&ses, 0, sizeof(ses));
@@ -502,41 +503,50 @@ int slac_associate(const char *if_name)
 	ses.RunID[7] = runid_counter++;
 	memcpy(ses.PEV_ID, pev_id, 17);
 	ses.limit = SLAC_ATTENUATION_THRESHOLD;
+
+    tl_init(&tl, "ISO 15118 SLAC Communication Timings");
     err = slac_cm_param_req(&ethconn, &ses);
     if (err != 0) {
-        printf("slac_associate: slac_cm_param_req error\n");
+        if (chattyslac) fprintf(stderr, "slac_associate: slac_cm_param_req error\n");
         return -1;
     }
-    printf("Start atten char\n");
+    tl_register(&tl, "CM_PARM");
+    if (chattyslac) fprintf(stderr, "Start atten char\n");
     err = slac_cm_start_atten_char(&ethconn, &ses);
     if (err != 0) {
-        printf("slac_associate: slac_cm_mnbc_sound error\n");
+        if (chattyslac) fprintf(stderr, "slac_associate: slac_cm_mnbc_sound error\n");
         return -1;
     }
-    printf("Send sounds\n");
+    tl_register(&tl, "CM_START_ATTEN_CHAR");
+    if (chattyslac) fprintf(stderr, "Send sounds\n");
     err = slac_cm_mnbc_sound(&ethconn, &ses);
     if (err != 0) {
-        printf("slac_associate: slac_cm_mnbc_sound error\n");
+        if (chattyslac) fprintf(stderr, "slac_associate: slac_cm_mnbc_sound error\n");
         return -1;
     }
-    printf("Receive atten char response\n");
+    tl_register(&tl, "CM_MNBC_SOUND");
+    if (chattyslac) fprintf(stderr, "Receive atten char response\n");
     err = slac_cm_atten_char(&ethconn, &ses);
     if (err != 0) {
-        printf("slac_associate: slac_cm_atten_char error\n");
+        if (chattyslac) fprintf(stderr, "slac_associate: slac_cm_atten_char error\n");
         return -1;
     }
-    printf("Slac match request\n");
+    tl_register(&tl, "CM_ATTEN_CHAR");
+    if (chattyslac) fprintf(stderr, "Slac match request\n");
     err = slac_cm_match_request(&ethconn, &ses);
         if (err != 0) {
-        printf("slac_associate: slac_cm_match_request error\n");
+        if (chattyslac) fprintf(stderr, "slac_associate: slac_cm_match_request error\n");
         return -1;
     }
-    printf("set key\n");
+    tl_register(&tl, "CM_SLAC_MATCH");
+    if (chattyslac) fprintf(stderr, "set key\n");
     err = slac_cm_set_key(&ethconn, &ses);
     if (err != 0) {
-        printf("slac_associate: slac_cm_set_key error\n");
+        if (chattyslac) fprintf(stderr, "slac_associate: slac_cm_set_key error\n");
         return -1;
     }
-    printf("done\n");
+    tl_register(&tl, "CM_SET_KEY");
+    tl_print(&tl);
+    if (chattyslac) fprintf(stderr, "done\n");
     return 0;
 }

@@ -6,23 +6,19 @@
 #include <nikolav2g.h>
 #include <polarssl/x509.h>
 #include <polarssl/error.h>
-#include <time.h>
 #include <OpenV2G/v2gEXIDatatypes.h>
 #include "slac/plc_eth.h"
+#include "slac/slacassoc.h"
 #include "client.h"
 #include "server.h"
+#include "timeprofiling.h"
 
-
-int slac_associate(const char *if_name);
 void plgp_slac_listen(const char *if_name, const uint8_t dest_mac_evse[6]);
 
 static const uint8_t EVMAC[6] = {0x00, 0x05, 0xB6, 0x01, 0x86, 0xBD};
 static const uint8_t EVSEMAC[6] = {0x00, 0x05, 0xB6, 0x01, 0x88, 0xA3};
 
 static const char *argv0;
-
-static int enable_timestamps;
-
 
 static void fatal(const char *fmt, ...)
 {
@@ -37,30 +33,11 @@ static void fatal(const char *fmt, ...)
     exit(1);
 }
 
-struct timespec tstart = {0,0};
-struct timespec tnow = {0,0};
-static void init_timestamps() {
-    enable_timestamps++;
-    clock_gettime(CLOCK_MONOTONIC, &tstart);
-}
-
-static void timestamp_print()
-{
-    struct timespec temp;
-    if (enable_timestamps) {
-        //double datetime_diff_ms = difftime(time(0), start_time);
-        //printf("%f\n", datetime_diff_ms);
-        clock_gettime(CLOCK_MONOTONIC, &tnow);
-        temp.tv_sec = tnow.tv_sec-tstart.tv_sec;
-		temp.tv_nsec = tnow.tv_nsec-tstart.tv_nsec;
-        printf("%luus\n", temp.tv_sec * 1000000 + temp.tv_nsec /1000);
-    }
-}
-
 static void ev(const char *if_name, bool tls_enabled)
 {
     evcc_conn_t conn;
     ev_session_t s;
+    tlog tl;
     memset(&conn, 0, sizeof(evcc_conn_t));
     memset(&s, 0, sizeof(s));
     int err;
@@ -68,10 +45,13 @@ static void ev(const char *if_name, bool tls_enabled)
     if (load_contract("certs/contractchain.pem", "certs/contract.key", &s) != 0) {
         fatal("can't load certs/contract.key: %m");
     }
+    tl_init(&tl, "ISO 15118 Post SLAC Communication Timings");
+    if (chattyv2g) printf("Starting sdp:\n");
     if (ev_sdp_discover_evse(if_name, &conn.addr, tls_enabled) < 0) {
         fatal("failed to discover EVSE on interface %s", if_name);
     }
-    printf("connecting to secc\n");
+    tl_register(&tl, "SDP");
+    if (chattyv2g) printf("connecting to secc\n");
     if (tls_enabled) {
         err = evcc_connect_tls(&conn, "certs/ev.pem", "certs/ev.key");
     } else {
@@ -81,29 +61,29 @@ static void ev(const char *if_name, bool tls_enabled)
         printf("main: evcc_connect_tls error\n");
         return;
     }
-    timestamp_print();
-    printf("session setup request\n");
+    tl_register(&tl, "Connection & apphandshake");
+    if (chattyv2g) printf("session setup request\n");
     err = session_request(&conn, &s);
     if (err != 0) {
         printf("RIP session_request\n");
         return;
     }
-    timestamp_print();
-    printf("service discovery request\n");
+    tl_register(&tl, "Session req");
+    if (chattyv2g) printf("service discovery request\n");
     err = service_discovery_request(&conn, &s);
     if (err != 0) {
         printf("ev_example: service discovery request err\n");
         return;
     }
-    timestamp_print();
-    printf("payment selection request\n");
+    tl_register(&tl, "Service disc. req");
+    if (chattyv2g) printf("payment selection request\n");
     err = payment_selection_request(&conn, &s);
     if (err != 0) {
         printf("ev_example: payment_selection_request err\n");
         return;
     }
-    timestamp_print();
-    printf("payment details request\n");
+    tl_register(&tl, "Payment select. req");
+    if (chattyv2g) printf("payment details request\n");
     if (!s.charging_is_free) {
         err = payment_details_request(&conn, &s);
         if (err != 0) {
@@ -111,36 +91,37 @@ static void ev(const char *if_name, bool tls_enabled)
             return;
         }
     }
-    timestamp_print();
-    printf("authorization request\n");
+    tl_register(&tl, "Payment details req");
+    if (chattyv2g) printf("authorization request\n");
     err = authorization_request(&conn, &s);
     if (err != 0) {
         printf("ev_example: authorization_request err\n");
         return;
     }
-    timestamp_print();
-    printf("charge parameter request\n");
+    tl_register(&tl, "Auth. req");
+    if (chattyv2g) printf("charge parameter request\n");
     charging_negotiation:
     err = charge_parameter_request(&conn, &s);
     if (err != 0) {
         printf("ev_example: charge_parameter_request err\n");
         return;
     }
-    timestamp_print();
-    printf("power delivery request\n");
+    tl_register(&tl, "Charge param. req");
+    if (chattyv2g) printf("power delivery request\n");
     err = power_delivery_request(&conn, &s, v2gchargeProgressType_Start);
     if (err != 0) {
         printf("ev_example: power_delivery start request err\n");
         return;
     }
-    printf("Charging (repeating charging status requests)\n");
+    tl_register(&tl, "Power deliv. req");
+    if (chattyv2g) printf("Charging (repeating charging status requests)\n");
     for (;ncycles < 5; ncycles++) {
-        timestamp_print();
         err = charging_status_request(&conn, &s);
         if (err != 0) {
             printf("ev_example: charging_status_request err\n");
             return;
         }
+        tl_register(&tl, "Charging status req");
         if (s.evse_notification == v2gEVSENotificationType_StopCharging) {
             printf("ev_example: EVSE has prompted charging to stop\n");
             break;
@@ -149,25 +130,29 @@ static void ev(const char *if_name, bool tls_enabled)
         }
         printf("=");
         fflush(stdout);
+        if (enable_timeprofiling) {
+            break;
+        }
         sleep(1);
     }
-    printf("Performing power delivery stop request\n");
+    if (chattyv2g) printf("Performing power delivery stop request\n");
     err = power_delivery_request(&conn, &s, v2gchargeProgressType_Stop);
     if (err != 0) {
         printf("ev_example: power_delivery_request err\n");
         return;
     }
-    timestamp_print();
-    printf("Performing session stop request\n");
+    tl_register(&tl, "Power delivery stop req");
+    if (chattyv2g) printf("Performing session stop request\n");
     err = session_stop_request(&conn, &s);
     if (err != 0) {
         printf("ev_example: session_stop_request err\n");
         return;
     }
-    timestamp_print();
+    tl_register(&tl, "Session stop req");
+    tl_print(&tl);
     evcc_close_conn(&conn);
     evcc_session_cleanup(&s);
-    printf("Finished charging, ending session\n");
+    if (chattyv2g) printf("Finished charging, ending session\n");
 }
 
 static void evse(const char *if_name)
@@ -227,6 +212,7 @@ threadmain(int argc,
 
         case 'v': // Verbose
             chattyv2g++;
+            chattyslac++;
             break;
         case 'n': // no tls
             notls++;
@@ -235,7 +221,7 @@ threadmain(int argc,
             secc_free_charge++;
             break;
         case 't':
-            init_timestamps();
+            enable_timeprofiling++;
             break;
         default:
             usage();

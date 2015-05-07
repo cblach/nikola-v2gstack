@@ -159,12 +159,6 @@ static ssize_t request_writer(void *args, atomic_int *cancel) {
             return -1;
         }
         nsleep(SDP_TRY_DELAY * TIME_MILLISECOND);
-        printf("{\n");
-        int j;
-        for( j = 0; j < SDP_HEADER_LEN + SDP_REQ_PAYLOAD_LEN; j++) {
-            printf("%x ", buf[j]);
-        }
-        printf("}\n");
         i++;
     }
     if (i == SDP_MAX_TRIES) {
