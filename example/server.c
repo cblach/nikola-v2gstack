@@ -768,10 +768,10 @@ int create_response_message(struct v2gEXIDocument *exiIn,
     if (exiIn->V2G_Message.Body.SessionSetupReq_isUsed) {
         if (s == NULL) {
     	    s = session_new(sizeof(session_data_t), &session_data_cleanup);
-    	    printf("New Session id = %lu\n", s->id);
+    	    printf("New Session id = %llu\n", (unsigned long long)s->id);
     	    printf("TLSENABLED = %d\n", tls_enabled);
         } else {
-            printf("Session with id = %lu has been resumed\n", s->id);
+            printf("Session with id = %llu has been resumed\n", (unsigned long long)s->id);
         }
     }
     // Note that the session can be NULL, thus this must be

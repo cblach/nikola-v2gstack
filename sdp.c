@@ -266,7 +266,6 @@ int ev_sdp_discover_evse(const char *if_name,
     switch (alt(alts)) {
         case 0: // Done reading response
             iocancel(iocw);
-            if (chattyv2g) fprintf(stderr, "received response\n");
             err = ret;
             break;
         case 1: // Done writing and no response -> error
@@ -319,7 +318,6 @@ void evse_sdp_respond(const char *if_name, struct sockaddr_in6 raddr,
     payload[18] = secc_security; // Signal 0x01 for TCP only or 0x00 for TLS
     payload[19] = 0; // Set underlying protocol to TCP (no choice)
     // === Send sdp response packet ===
-    if (chattyv2g) fprintf(stderr, "======SEND\n");
     sentSz = sendto(sock, buf,
                     SDP_HEADER_LEN+SDP_RESP_PAYLOAD_LEN, 0,
                     (struct sockaddr *)&raddr, sizeof(struct sockaddr_in6));
@@ -340,7 +338,7 @@ void sdp_listen(const char *if_name, int tls_port, int tcp_port)
     struct ipv6_mreq mreq;
     struct sockaddr_in6 raddr;
     size_t raddr_len = sizeof(raddr);
-    if (chattyv2g) fprintf(stderr, "start listen %s fjhjh\n", if_name);
+    if (chattyv2g) fprintf(stderr, "SDP is listening on interface %s\n", if_name);
     // === Get interface index ===
     unsigned int if_index = if_nametoindex(if_name);
     if (if_index == 0) {

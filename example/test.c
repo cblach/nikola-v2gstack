@@ -152,7 +152,7 @@ static void ev(const char *if_name, bool tls_enabled)
     tl_print(&tl);
     evcc_close_conn(&conn);
     evcc_session_cleanup(&s);
-    if (chattyv2g) printf("Finished charging, ending session\n");
+    if (chattyv2g) printf("Succesfully finished charging, ending session\n");
 }
 
 static void evse(const char *if_name)

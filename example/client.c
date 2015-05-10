@@ -400,7 +400,6 @@ int payment_details_request(evcc_conn_t *conn, ev_session_t *s)
         printf("unable to do payment_details_request v2g_request, exiting\n");
         return -1;
     }
-    printf("v2g request\n");
     // === Validate response type ===
     if (exiOut.V2G_Message.Body.PaymentDetailsRes_isUsed != 1u) {
         printf("payment_details_request: wrong response type\n");
@@ -464,7 +463,6 @@ int authorization_request(evcc_conn_t *conn, ev_session_t *s)
         printf("\t EVSEProcessing=Not Finished\n");
         return -1;
 	}
-    printf("\t EVSEProcessing=Finished\n");
     return 0;
 }
 

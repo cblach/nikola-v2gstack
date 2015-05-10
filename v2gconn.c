@@ -40,7 +40,7 @@ int chattyv2g = 0;
 #define V2G_EVCC_Msg_Timeout_Default 2
 #define V2G_SECC_Sequence_Timeout 60
 
-#define IGNORE_SSL_CERTIFICATE_VALIDITY 1 // Set to 1 for testing
+#define IGNORE_SSL_CERTIFICATE_VALIDITY 0 // Set to 1 for ca testing
 #define TIME_MICROSECOND 1000
 #define TIME_MILLISECOND (TIME_MICROSECOND * 1000)
 #define TIME_SECOND (TIME_MILLISECOND * 1000)
@@ -111,6 +111,13 @@ void print_byte_array(byte *arr, size_t n)
     if (chattyv2g) fprintf(stderr, " ]\n");
 }
 
+void print_mbedtls_err(int errcode) {
+    char buf[1024];
+    printf("RIIIIIIIIIIP\n");
+    polarssl_strerror(errcode, buf, 1024);
+    printf("polarssl error = %s\n", buf);
+}
+
 void print_ssl_read_err(int err)
 {
     switch (err) {
@@ -125,12 +132,36 @@ void print_ssl_read_err(int err)
             if (chattyv2g) fprintf(stderr, "ssl socket error; want read/want write\n");
             return;
         case 0:
-            if (chattyv2g) fprintf(stderr, "EOF\n");
+            if (chattyv2g) fprintf(stderr, "EOF, connection closed\n");
             return;
         default:
             if (chattyv2g) fprintf(stderr,  "ssl_read returned -0x%04x\n", -err);
             return;
     }
+}
+
+void debug_sslhandshake(ssl_context *ssl) {
+    int err;
+    if ((err = ssl_get_verify_result(ssl)) != 0) {
+        fprintf(stderr,  "evcc_connect_tls failed\n");
+
+        if ((err & BADCERT_EXPIRED) != 0) {
+            fprintf(stderr,  "  ! server certificate has expired\n");
+        }
+        if ((err & BADCERT_REVOKED) != 0) {
+            fprintf(stderr,  "  ! server certificate has been revoked\n");
+        }
+        if ((err & BADCERT_CN_MISMATCH) != 0) {
+            fprintf(stderr,  "  ! CN mismatch (expected CN=%s)\n", "PolarSSL Server 1");
+        }
+        if ((err & BADCERT_NOT_TRUSTED) != 0) {
+            fprintf(stderr,  "  ! self-signed or not signed by a trusted CA\n");
+        }
+        fprintf(stderr,  "\n");
+    } else {
+        fprintf(stderr,  " ok\n");
+    }
+
 }
 
 //======================================
@@ -543,6 +574,7 @@ struct tls_global_params_t{
     entropy_context entropy;
     ssl_cache_context cache;
     handle_func_t handle_func;
+    x509_crt trusted_client_rootcerts;
 };
 struct handletls_args_t{
     int fd;
@@ -700,7 +732,7 @@ int secc_handle_request(comboconn_t *cconn, Chan *tc,
     }
     err = comboreadn(cconn, buf + V2GTP_HEADER_LENGTH, payload_len, tc);
     if (err != 0) {
-        if (chattyv2g) fprintf(stderr, "secc_handle_request error: sslreadn\n");
+        if (chattyv2g) fprintf(stderr, "secc_handle_request error: comboreadn\n");
         return -1;
     }
     struct v2gEXIDocument exi_in;
@@ -726,7 +758,7 @@ int secc_handle_request(comboconn_t *cconn, Chan *tc,
     //=== Write response ===
     err = combowriten(cconn, buf, (unsigned int) *stream.pos, tc);
     if (err != 0) {
-        if (chattyv2g) fprintf(stderr,  "secc_handle_request: sslwriten failed\n");
+        if (chattyv2g) fprintf(stderr,  "secc_handle_request: combowriten failed\n");
         return -1;
     }
     if (chattyv2g) fprintf(stderr,  "Succesful request\n");
@@ -825,7 +857,7 @@ void secc_handle_tls(void *arg)
                       net_send, &sockfd);
     ssl_set_session_cache(ssl, ssl_cache_get, &tlsp->cache,
                           ssl_cache_set, &tlsp->cache);
-    ssl_set_ca_chain(ssl, tlsp->srvcert.next, NULL, NULL);
+    ssl_set_ca_chain(ssl, &tlsp->trusted_client_rootcerts, NULL, NULL);
     if ((err = ssl_set_own_cert(ssl, &tlsp->srvcert, &tlsp->pkey)) != 0) {
         if (chattyv2g) fprintf(stderr,  " failed\n  ! ssl_set_own_cert returned %d\n\n", err);
         goto exit;
@@ -838,6 +870,8 @@ void secc_handle_tls(void *arg)
         if (err != POLARSSL_ERR_NET_WANT_READ &&
             err != POLARSSL_ERR_NET_WANT_WRITE) {
             if (chattyv2g) fprintf(stderr, "failed\n  ! ssl_handshake returned %d\n\n", err);
+            if (chattyv2g) print_mbedtls_err(err);
+            if(chattyv2g) debug_sslhandshake(ssl);
             goto exit;
         }
     }
@@ -939,6 +973,14 @@ void secc_listen_tls_child(void *vargs)
         rendez(vargs, NULL);
         return ;
     }
+    err = x509_crt_parse_path(&tlsp->trusted_client_rootcerts,
+                              "certs/root/oem/certs/");
+    if (err != 0) {
+        if (chattyv2g) fprintf(stderr,  "evcc_connect_tls: unable to parse trusted root certificates %d\n\n", err);
+        rendez(vargs, NULL);
+        return;
+    }
+
     err = pk_parse_keyfile(&tlsp->pkey, listen_args->key_path, NULL);
     if (err != 0) {
         if (chattyv2g) fprintf(stderr, " failed\n  !  pk_parse_key returned %d\n\n", err);
@@ -1183,12 +1225,12 @@ int v2g_handshake_request(evcc_conn_t *conn)
 		if (chattyv2g) fprintf(stderr, "EV side: Response of the EVSE \n");
 	if (handshake_resp.supportedAppProtocolRes.ResponseCode
 	    != appHandresponseCodeType_OK_SuccessfulNegotiation) {
-	    if (chattyv2g) fprintf(stderr, "\t\tResponseCode=ERROR_UnsuccessfulNegotiation\n");
+	    if (chattyv2g) fprintf(stderr, "\tResponseCode=ERROR_UnsuccessfulNegotiation\n");
         return -1;
 	}
-	if (chattyv2g) fprintf(stderr, "\t\tResponseCode=OK_SuccessfulNegotiation\n");
-	if (chattyv2g) fprintf(stderr,  "\t\tSchemaID=%d\n",
-		        handshake_resp.supportedAppProtocolRes.SchemaID);
+	if (chattyv2g) fprintf(stderr, "AppHandshake: Succesful Protocol Negotiation\n");
+	//if (chattyv2g) fprintf(stderr,  "\t\tSchemaID=%d\n",
+	//	        handshake_resp.supportedAppProtocolRes.SchemaID);
 	return 0;
 }
 
@@ -1345,6 +1387,7 @@ int evcc_connect_tls(evcc_conn_t *conn,
 {
     int err = 0;
     const char *pers = "secc_ssl_client";
+    x509_crt trusted_certs;
     err = init_evcc_conn(conn, true);
     if (err != 0) {
         if (chattyv2g) fprintf(stderr, "evcc_connect_tls: init_evcc_conn\n");
@@ -1358,6 +1401,7 @@ int evcc_connect_tls(evcc_conn_t *conn,
     x509_crt_init(&conn->cacert);
     pk_init(&conn->pkey);
     memset(&conn->ctr_drbg, 0, sizeof(ctr_drbg_context));
+    memset(&trusted_certs, 0, sizeof(trusted_certs));
     // === Setup random number generator for tls ===
     err = ctr_drbg_init(&conn->ctr_drbg, entropy_func, &conn->entropy,
                         (const unsigned char *) pers,
@@ -1395,8 +1439,15 @@ int evcc_connect_tls(evcc_conn_t *conn,
     } else {
         ssl_set_authmode(&conn->cconn.ssl, SSL_VERIFY_REQUIRED);
     }
+    err = x509_crt_parse_path(&trusted_certs,
+                              "certs/root/v2g/certs/");
+    if (err != 0) {
+        if (chattyv2g) fprintf(stderr,  "evcc_connect_tls: unable to parse trusted root certificates %d\n\n", err);
+        goto exit;
+    }
     ssl_set_ciphersuites(&conn->cconn.ssl, V2G_CIPHER_SUITES);
-    ssl_set_ca_chain(&conn->cconn.ssl, &conn->cacert, NULL, "EVCC (client)");
+
+    ssl_set_ca_chain(&conn->cconn.ssl, &trusted_certs, NULL, "evse");
     err = ssl_set_own_cert(&conn->cconn.ssl, &conn->cacert, &conn->pkey);
     if (err != 0) {
         if (chattyv2g) fprintf(stderr,  "evcc_connect_tls: ssl_set_own_cert returned %d\n\n", err);
@@ -1408,34 +1459,19 @@ int evcc_connect_tls(evcc_conn_t *conn,
                 net_send, &conn->cconn.sockfd);
     // === Perform SSL handshake ===
     while ((err = ssl_handshake(&conn->cconn.ssl)) != 0) {
+        printf("%d\n", err);
         if (err != POLARSSL_ERR_NET_WANT_READ && err != POLARSSL_ERR_NET_WANT_WRITE)
         {
             if (chattyv2g) fprintf(stderr,  "evcc_connect_tls: ssl_handshake returned -0x%x\n\n", err);
+            if (chattyv2g) print_mbedtls_err(err);
+
+            if(chattyv2g) debug_sslhandshake(&conn->cconn.ssl);
+
             goto exit;
         }
     }
     // === Check certificate validity ===
-    if ((err = ssl_get_verify_result(&conn->cconn.ssl)) != 0) {
-        if (chattyv2g) fprintf(stderr,  "evcc_connect_tls failed\n");
-
-        if ((err & BADCERT_EXPIRED) != 0) {
-            if (chattyv2g) fprintf(stderr,  "  ! server certificate has expired\n");
-        }
-        if ((err & BADCERT_REVOKED) != 0) {
-            if (chattyv2g) fprintf(stderr,  "  ! server certificate has been revoked\n");
-        }
-        if ((err & BADCERT_CN_MISMATCH) != 0) {
-            if (chattyv2g) fprintf(stderr,  "  ! CN mismatch (expected CN=%s)\n", "PolarSSL Server 1");
-        }
-        if ((err & BADCERT_NOT_TRUSTED) != 0) {
-            if (chattyv2g) fprintf(stderr,  "  ! self-signed or not signed by a trusted CA\n");
-        }
-        if (chattyv2g) fprintf(stderr,  "\n");
-    } else {
-        if (chattyv2g) fprintf(stderr,  " ok\n");
-    }
 	conn->alive = true;
-	    if (chattyv2g) fprintf(stderr, "init mutex\n");
     memset(&conn->mutex, 0, sizeof(conn->mutex));
     err = threadcreate(evcc_connect_stream_reader, conn, 1024 * 1024);
     if (err != 0) {

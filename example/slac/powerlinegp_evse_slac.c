@@ -47,7 +47,7 @@ void plgp_slac_listen_blocking(void *vargs)
     }
     toggle_listen_slac_assn(&ethconn, dest_mac_evse, false);
     toggle_listen_slac_assn(&ethconn, dest_mac_evse, true);
-    printf("start SlAC listen!\n");
+    printf("Starting SLAC listener!\n");
     while (1) {
         n = ethrecv(&ethconn, buffer);
         uint16_t slac_type = get_slac_type(buffer);
@@ -73,13 +73,13 @@ void plgp_slac_listen_blocking(void *vargs)
                 break;
             case 0x0b06:
                 if (buffer[17] != 0x01) {
-                    printf("YAY, link established %u\n", buffer[17]);
+                    printf("Data Link Established!\n");
 
                 }
                 break;
             case 0x0b05:
                 printf("Attenuation profile received\n");
-                dumpbytes(buffer, n);
+                //dumpbytes(buffer, n);
                 break;
             default:
                 printf("unexpected slac type %0x\n", slac_type);
